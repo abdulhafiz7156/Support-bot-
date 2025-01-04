@@ -21,6 +21,11 @@ const userPhotoUrls = {}
 const userSteps = {};
 const userTaskIds = {};
 
+bot.telegram.setMyCommands([
+    { command: 'start', description: 'Создание заявки' },
+    // { command: 'stop', description: 'Отмена заявки' },
+]);
+
 const sendToClickUp = async ({ title, description, restaurant, clientRole, clientName, clientContact, ctx }) => {
     console.log(`client role${userContacts}  client name ${userContacts} client contact ${userContacts}`);
     const url = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task`;
@@ -47,7 +52,7 @@ const sendToClickUp = async ({ title, description, restaurant, clientRole, clien
         await addCommentToTask(taskId, `Client Name: ${clientName}`);
         await addCommentToTask(taskId, `Client Contact: ${clientContact}`);
 
-        assignUserToTask(taskId, '158692681');
+        assignUserToTask(taskId, '5725322');
 
         return response.data;
     } catch (error) {
@@ -244,23 +249,23 @@ const askForRestaurant = async (ctx, userLang) => {
 
 const askForProblemDescription = async (ctx, userLang) => {
     const prompt = userLang === 'uz'
-        ? 'Iltimos, muammoni batafsil tasvirlab bering:'
-        : 'Пожалуйста, подробно опишите проблему:';
+        ? 'Iltimos, kelib chiqqan muammoni batafsil tasvirlab bering:'
+        : 'Пожалуйста, подробно опишите проблему с которой вы столкнулись:';
     await ctx.reply(prompt);
 };
 
 const askForProblemType = async (ctx, userLang) => {
     const prompt = userLang === 'uz'
-        ? 'Iltimos, muammo turini tanlang:'  // Uzbek version
-        : 'Пожалуйста, выберите тип проблемы:'; // Russian version
+        ? 'Iltimos, kelib chiqqan muammoni ruknini tanlang:'  // Uzbek version
+        : 'Пожалуйста, выберите категорию проблемы с которой вы столкнулись:'; // Russian version
 
     // Send a message with an inline keyboard to choose problem type
     await ctx.reply(prompt, {
         reply_markup: {
             inline_keyboard: [
-                [{ text: userLang === 'uz' ? 'Zakazda xatolik' : 'Ошибка в заказе', callback_data: 'problem_Ошибка в заказе' }],
-                [{ text: userLang === 'uz' ? 'QR kod bilan xatolik' : 'Ошибка в QR коде', callback_data: 'problem_Ошибка в QR коде' }],
-                [{ text: userLang === 'uz' ? 'IKPU bilan xatolik' : 'Ошибка в ИКПУ', callback_data: 'problem_Ошибка в ИКПУ' }],
+                [{ text: userLang === 'uz' ? 'Buyurtma bilan bog`liq xatolik' : 'Ошибка связанная с  заказом', callback_data: 'problem_Ошибка в заказе' }],
+                [{ text: userLang === 'uz' ? 'QR kodli chek bilan bog`liq muammo' : 'Проблема с печатью кода с QR кодом', callback_data: 'problem_Ошибка в QR коде' }],
+                [{ text: userLang === 'uz' ? 'Maxsulot MXIKi bilan bog`liq muammo' : 'Проблема с ИКПУ товаров', callback_data: 'problem_Ошибка в ИКПУ' }],
             ],
         },
     });
@@ -269,15 +274,15 @@ const askForProblemType = async (ctx, userLang) => {
 const askForImageUpload = async (ctx, userLang) => {
     const prompt = userLang === 'uz'
         ? 'Iltimos, muammoni tasvirlaydigan rasmni yuboring:'
-        : 'Пожалуйста, отправьте изображение, которое иллюстрирует проблему:';
+        : 'Пожалуйста, отправьте изображение (скриншот), в котором можно увидеть ошибку:';
     await ctx.reply(prompt);
 };
 
 const askForClientRole = async (ctx, userLang) => {
     console.log("ask for client role");
     const prompt = userLang === 'uz'
-        ? 'Iltimos, mijoz rolini tanlang:'
-        : 'Пожалуйста, выберите роль клиента:';
+        ? 'Lavozimingizni tanlang'
+        : 'Укажите вашу должность';
 
 
     await ctx.reply(prompt, {
@@ -302,8 +307,8 @@ const handleRestaurantSelection = async (ctx, userInput) => {
     console.log(`User ${ctx.from.id} selected restaurant: ${selectedRestaurant}`);
     await ctx.reply(
         userLang === 'uz'
-            ? `Siz ${selectedRestaurant} restoranidan yozmoqchisiz!`
-            : `Вы хотите писать от ресторана: ${selectedRestaurant}!`
+            ? `Siz ${selectedRestaurant} muassasi nomidan so'rov yaratypasiz!`
+            : `Вы создаете запрос от имени: ${selectedRestaurant}!`
     );
 
     // Proceed to the next step: ask for problem description
@@ -353,11 +358,11 @@ const processTaskCreation = async (ctx) => {
         monitorTaskStatus(task.id, ctx);
 
         // Inform the user the task has been created successfully
-        await ctx.reply(
-            userLang === 'uz'
-                ? 'Muammo va rasm muvaffaqiyatli yuborildi!'
-                : 'Проблема и изображение успешно отправлены!'
-        );
+        // await ctx.reply(
+        //     userLang === 'uz'
+        //         ? 'Muammo va rasm muvaffaqiyatli yuborildi!'
+        //         : 'Проблема и изображение успешно отправлены!'
+        // );
 
         // Clear user state after task is created
         clearUserState(ctx.from.id);
@@ -366,8 +371,8 @@ const processTaskCreation = async (ctx) => {
         console.error('Error processing task creation:', error.message);
         await ctx.reply(
             userLang === 'uz'
-                ? 'Muammo yaratishda xatolik yuz berdi.'
-                : 'Произошла ошибка при создании задачи.'
+                ? 'So`rov yaratishda xatolik yuz berdi.'
+                : 'Произошла ошибка при создании запроса.'
         );
     }
 };
@@ -386,7 +391,7 @@ bot.start((ctx) => {
     userSteps[ctx.from.id] = 'language';  // Задаём начальный шаг
     console.log("lang")
     ctx.reply(
-        `Assalomu alaykum, ${ctx.from.first_name || 'there'}! Veda Vector jamosining 24/7 telegram botiga xush kelibsiz! Iltimos tilni tanlang:`,
+        `Assalomu alaykum, ${ctx.from.first_name || 'there'}! Veda Vector jamosining 24/7 qollab quvvatlash xizmatiga xush kelibsiz! Iltimos sizga qulay tilni tanlang:`,
         {
             reply_markup: {
                 inline_keyboard: [
@@ -456,7 +461,7 @@ bot.on('callback_query', async (ctx) => {
 
             await ctx.reply(
                 userLang === 'uz'
-                    ? 'Muammo hal etildi. Rahmat!'
+                    ? 'Muammo hal. Rahmat!'
                     : 'Проблема решена. Спасибо!'
             );
         } else if (data === 'problem_solved_no') {
@@ -476,10 +481,6 @@ bot.on('callback_query', async (ctx) => {
         return;
     }
 
-
-    console.log(`User ${userId} current step: ${currentStep}`);
-
-    // Handle problem selection (problem_type selection)
     if (data.startsWith('problem_')) {
         userSelectedProblems[userId] = data.replace('problem_', '');
         userSteps[userId] = 'problem_type';
@@ -487,14 +488,13 @@ bot.on('callback_query', async (ctx) => {
         await ctx.answerCbQuery();
         await ctx.reply(
             userLang === 'uz'
-                ? 'Muammo turi tanlandi. Iltimos, restoran nomini kiriting:'
-                : 'Тип проблемы выбран. Пожалуйста, напишите название заведения:'
+                ? 'Muammo rukni tanlandi. Iltimos, muassasa nomini kiriting:'
+                : 'Категория проблемы выбрана. Пожалуйста, напишите название заведения:'
         );
         return;
 
     }
 
-    // Handle language selection
     if (data === 'lang_uz' || data === 'lang_ru') {
         const lang = data.split('_')[1];
         userLanguages[userId] = lang;
@@ -515,7 +515,6 @@ bot.on('callback_query', async (ctx) => {
         return;
     }
 
-    // Handle client role selection and image upload request
     if (currentStep === 'client_role') {
         if (data.startsWith('client_role_')) {
             const clientRole = data.replace('client_role_', '');
@@ -527,11 +526,15 @@ bot.on('callback_query', async (ctx) => {
             await processTaskCreation(ctx);
             await ctx.reply(
                 userLang === 'uz'
-                    ? `Siz ${clientRole} rolini tanladingiz. Muammo muvaffaqiyatli yaratildi.`
-                    : `Вы выбрали роль ${clientRole}. Проблема успешно создан.`
+                    ? `Siz ${clientRole} rolini tanladingiz. So'rov muvaffaqiyatli yaratildi.`
+                    : `Вы выбрали роль ${clientRole}. Задача успешно создана.`
             );
 
-
+            await ctx.reply(
+                userLang === 'uz'
+                    ? `Eng qisqa vaqtda xodimlarimiz aloqaga chiqishadi.`
+                    : `В самое ближайшее время наши сотрудники выйдут на связь.`
+            );
             console.log(`User ${userId} step changed to 'image'.`);
 
             // await askForImageUpload(ctx, userLang);
@@ -542,22 +545,49 @@ bot.on('callback_query', async (ctx) => {
         clearUserState(userId);
         return;
     }
+
+    if (data === 'cancel_task_creation') {
+        clearUserState(userId);
+        await ctx.answerCbQuery();
+
+        const userLang = userLanguages[userId] || 'uz';
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'So`rov yaratish jarayoni bekor qilindi.'
+                : 'Процесс создания запроса отменен.'
+        );
+        return;
+    }
     console.log(`Unhandled callback query: ${data}`);
 });
 
 bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery.data;
+
     if (data === 'lang_uz' || data === 'lang_ru') {
         const lang = data.split('_')[1];
         userLanguages[ctx.from.id] = lang;
+
+        // Убираем инлайн-клавиатуру
+        try {
+            await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+        } catch (error) {
+            console.error('Ошибка при удалении кнопок:', error.message);
+        }
+
+        // Отвечаем на callback
         await ctx.answerCbQuery();
+
+        // Отправляем новое сообщение с обычной клавиатурой
         await ctx.reply(
             lang === 'uz'
                 ? 'Til uzbek tiliga o\'zgardi! Iltimos, kontakt ma\'lumotlaringizni ulashing:'
                 : 'Язык установлен на русский! Пожалуйста, поделитесь своими контактными данными:',
             {
                 reply_markup: {
-                    keyboard: [[{ text: lang === 'uz' ? 'Kontakt ulashish' : 'Поделиться контактом', request_contact: true }]],
+                    keyboard: [
+                        [{ text: lang === 'uz' ? 'Kontakt ulashish' : 'Поделиться контактом', request_contact: true }],
+                    ],
                     resize_keyboard: true,
                     one_time_keyboard: true,
                 },
@@ -579,7 +609,6 @@ bot.on('text', async (ctx) => {
         console.log("hello client role")
     }
 });
-
 
 bot.launch()
     .then(() => console.log('Bot is running...'))
