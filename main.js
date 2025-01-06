@@ -381,12 +381,11 @@ const sendWaitingMessage = async (ctx, userLang) => {
 
 const saveFeedbackToClickUp = async (userId, feedbackText, rating) => {
     const taskId = userTaskIds[userId];  // Получаем ID задачи пользователя
+
     console.log(`monovi ishlayabdi ${feedbackText} ${rating} monoviyam`);
-    // Формируем первый комментарий (рейтинг)
     const ratingComment = `User feedback: ${rating} stars`;
     await addCommentToTask(taskId, ratingComment); // Добавляем комментарий с рейтингом
 
-    // Формируем второй комментарий (текст отзыва)
     const feedbackComment = `User feedback (text): ${feedbackText}`;
     await addCommentToTask(taskId, feedbackComment); // Добавляем текст отзыва как комментарий
 };
@@ -461,6 +460,20 @@ bot.start((ctx) => {
                 ],
             },
         }
+    );
+});
+
+bot.command('stop', async (ctx) => {
+    const userId = ctx.from.id;
+
+    clearUserState(userId);
+
+    const userLang = userLanguages[userId] || 'uz';
+
+    await ctx.reply(
+        userLang === 'uz'
+            ? 'Sizning arizangiz bekor qilindi. Yangi yaratish uchun /start ni bosing.'
+            : 'Ваша заявка была отменена. Чтобы создать новое нажмите на /start .'
     );
 });
 
@@ -698,19 +711,6 @@ bot.on('text', async (ctx) => {
     }
 });
 
-bot.command('stop', async (ctx) => {
-    const userId = ctx.from.id;
-
-    clearUserState(userId);
-
-    const userLang = userLanguages[userId] || 'uz';
-
-    await ctx.reply(
-        userLang === 'uz'
-            ? 'Sizning arizangiz bekor qilindi.'
-            : 'Ваша заявка была отменена.'
-    );
-});
 
 bot.launch()
     .then(() => console.log('Bot is running...'))
