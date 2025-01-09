@@ -1,26 +1,26 @@
-const { Telegraf } = require('telegraf');
 const axios = require('axios');
-const path = require('path');
-const fs = require('fs');
 const FormData = require('form-data');
+const { Telegraf } = require('telegraf');
+const {message} = require("telegraf/filters");
+const path = require('path');
 
+const CLICKUP_LIST_ID = '901804634528';
 const BOT_TOKEN = '7712404901:AAFmA0FeK_NSxRw3O6SWRHUlAuSfgJ5NsLk';
 const CLICKUP_API_KEY = 'pk_158692681_BDRAASUB1DTHX9I061Y9CT0HY4ITML27';
-const CLICKUP_LIST_ID = '901804634528';
 
-// Xafizs' list id 901804725083
+// Xafiz list id 901804725083
 // Veda Vectore list id 901804634528
 const bot = new Telegraf(BOT_TOKEN);
 
-const userLanguages = {};
-const userRestaurants = {};
-const userDescription = {};
-const userContacts = {};
-const userSelectedProblems = {};
-const userPhotoUrls = {}
 const userSteps = {};
 const userTaskIds = {};
+const userContacts = {};
+const userLanguages = {};
+const userPhotoUrls = {}
 const userFeedbacks = {};
+const userRestaurants = {};
+const userDescription = {};
+const userSelectedProblems = {};
 
 const roles = {
     'client_role_manager': {
@@ -42,16 +42,16 @@ const roles = {
 };
 
 bot.telegram.setMyCommands([
-    { command: 'start', description: 'Создание заявки' },
+    { command: 'create', description: 'Создание заявки' },
     { command: 'stop', description: 'Отмена заявки' },
 ]);
 
-const sendToClickUp = async ({ title, description, restaurant, clientRole, clientName, clientContact, ctx }) => {
-    console.log(`client role${userContacts}  client name ${userContacts} client contact ${userContacts}`);
+const sendToClickUp = async ({ title, description, ctx }) => {
+    console.log(`Creating task for problem type: ${title}`);
     const url = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task`;
     const data = {
-        name: title,
-        description: description,
+        name: title,  // Title comes from the problem type selected
+        description: description || 'No description provided', // Default to a simple message if no description is given
     };
 
     try {
@@ -65,16 +65,10 @@ const sendToClickUp = async ({ title, description, restaurant, clientRole, clien
 
         const taskId = response.data.id;
 
-        userTaskIds[ctx.from.id] = taskId;
+        userTaskIds[ctx.from.id] = taskId; // Save task ID in user state
 
-        const humanReadableRole = roles[clientRole]?.[userLanguages[ctx.from.id]] || 'Unknown role';
-
-        await addCommentToTask(taskId, `Client Role: ${clientRole}`);
-        await addCommentToTask(taskId, `Client Name: ${clientName}`);
-        await addCommentToTask(taskId, `Client Contact: ${clientContact}`);
-        await addCommentToTask(taskId, `Restaurant: ${restaurant}`);
-
-        assignUserToTask(taskId, '5725322');
+        // Assign task to a default user or team member (can be changed later)
+        assignUserToTask(taskId, '5725322'); // For example, assign to user with ID '5725322'
 
         return response.data;
     } catch (error) {
@@ -83,24 +77,31 @@ const sendToClickUp = async ({ title, description, restaurant, clientRole, clien
     }
 };
 
-const addCommentToTask = async (taskId, commentText) => {
-    console.log(commentText)
-    const url = `https://api.clickup.com/api/v2/task/${taskId}/comment`;
-    const data = {
-        comment_text: commentText,  // The content of the comment
-    };
+const clearUserState = (userId) => {
+    delete userLanguages[userId];
+    delete userRestaurants[userId];
+    delete userDescription[userId];
+    delete userContacts[userId];
+    delete userSelectedProblems[userId];
+    delete userPhotoUrls[userId];
+};
 
-    try {
-        const response = await axios.post(url, data, {
-            headers: {
-                Authorization: CLICKUP_API_KEY,
-                'Content-Type': 'application/json',
-            },
-        });
-        console.log(`Comment added to task ${taskId}: ${commentText}`);
-    } catch (error) {
-        console.error(`Error adding comment to task ${taskId}:`, error.response?.data || error.message);
-    }
+const askForFeedback = async (ctx, userLang) => {
+    const prompt = userLang === 'uz'
+        ? 'Muammo hal etildi. Iltimos, xizmatimizni baholang (1 dan 5 gacha):'
+        : 'Проблема решена. Пожалуйста, оцените наш сервис от 1 до 5:';
+
+    await ctx.reply(prompt, {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '⭐️', callback_data: 'feedback_1' }],
+                [{ text: '⭐️⭐️', callback_data: 'feedback_2' }],
+                [{ text: '⭐️⭐️⭐️', callback_data: 'feedback_3' }],
+                [{ text: '⭐️⭐️⭐️⭐️', callback_data: 'feedback_4' }],
+                [{ text: '⭐️⭐️⭐️⭐️⭐️', callback_data: 'feedback_5' }],
+            ],
+        },
+    });
 };
 
 const checkTaskStatus = async (taskId, ctx) => {
@@ -153,10 +154,24 @@ const checkTaskStatus = async (taskId, ctx) => {
     }
 };
 
-const monitorTaskStatus = (taskId, ctx) => {
-    setInterval(() => {
-        checkTaskStatus(taskId, ctx);
-    }, 10000);  // Check every 10 seconds (or adjust as needed)
+const addCommentToTask = async (taskId, commentText) => {
+    console.log(commentText)
+    const url = `https://api.clickup.com/api/v2/task/${taskId}/comment`;
+    const data = {
+        comment_text: commentText,  // The content of the comment
+    };
+
+    try {
+        const response = await axios.post(url, data, {
+            headers: {
+                Authorization: CLICKUP_API_KEY,
+                'Content-Type': 'application/json',
+            },
+        });
+        console.log(`Comment added to task ${taskId}: ${commentText}`);
+    } catch (error) {
+        console.error(`Error adding comment to task ${taskId}:`, error.response?.data || error.message);
+    }
 };
 
 const updateTaskStatus = async (newStatus, ctx) => {
@@ -203,6 +218,114 @@ const updateTaskStatus = async (newStatus, ctx) => {
     }
 };
 
+const assignUserToTask = async (taskId, assigneeId) => {
+    const url = `https://api.clickup.com/api/v2/task/${taskId}`;
+    const data = {
+        assignees: { add: [assigneeId] },
+        priority: 1,
+    };
+
+    try {
+        const response = await axios.put(url, data, {
+            headers: {
+                Authorization: CLICKUP_API_KEY,
+                'Content-Type': 'application/json',
+            },
+        });
+        console.log(`User with ID ${assigneeId} assigned to task ${taskId}`);
+        return response.data;
+    } catch (error) {
+        console.error(`Error assigning user to task ${taskId}:`, error.response?.data || error.message);
+        throw error;
+    }
+};
+
+const askForProblemType = async (ctx, userLang) => {
+    const prompt = userLang === 'uz'
+        ? 'Iltimos, kelib chiqqan muammoni ruknini tanlang:'  // Uzbek version
+        : 'Пожалуйста, выберите категорию проблемы с которой вы столкнулись:'; // Russian version
+
+    await ctx.reply(prompt, {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: userLang === 'uz' ? 'Технический вопрос (Texnik savol)' : '', callback_data: 'problem_technicla' }],
+                [{ text: userLang === 'uz' ? 'Вопрос к фин отделу (Moliya bo\'limi uchun savol)' : '', callback_data: 'problem_financial' }],
+                [{ text: userLang === 'uz' ? 'Вопрос к мат отделу (Material bo\'limi uchun savol)' : '', callback_data: 'problem_material' }],
+            ],
+        },
+    });
+};
+
+const askForImageUpload = async (ctx, userLang) => {
+    const prompt = userLang === 'uz'
+        ? 'Iltimos, muammoni tasvirlaydigan rasmni yuboring:'
+        : 'Пожалуйста, отправьте изображение (скриншот), в котором можно увидеть ошибку:';
+    await ctx.reply(prompt);
+};
+
+const monitorTaskStatus = (taskId, ctx) => {
+    setInterval(() => {
+        checkTaskStatus(taskId, ctx);
+    }, 10000);  // Check every 10 seconds (or adjust as needed)
+};
+
+const sendWaitingMessage = async (ctx, userLang) => {
+    const waitingText = userLang === 'uz'
+        ? 'Iltimos, kuting... So\'rov yaratilmoqda.'
+        : 'Пожалуйста, подождите... Запрос создается.';
+
+    // Отправить сообщение о том, что нужно подождать
+    const sentMessage = await ctx.reply(waitingText);
+
+    // Сохраняем ID сообщения, чтобы потом удалить его
+    userSteps[ctx.from.id] = { ...userSteps[ctx.from.id], waitingMessageId: sentMessage.message_id };
+};
+
+const processTaskCreation = async (ctx) => {
+    try {
+        const userLang = userLanguages[ctx.from.id] || 'uz';
+
+        await sendWaitingMessage(ctx, userLang);
+
+        const title = userSelectedProblems[ctx.from.id] || 'Problem';
+
+        const chat = await ctx.telegram.getChat(ctx.chat.id); // Get chat details
+        const chatDescription = chat.description || 'Нету описании группы';
+
+
+        const task = await sendToClickUp({
+            title,
+            description: chatDescription,
+            ctx,
+        });
+
+        await ctx.reply("Endi iltimos ma'lumot bering(rasm, text, video message, voice)")
+
+        // If a photo URL exists, upload the photo to ClickUp
+        if (userPhotoUrls[ctx.from.id]) {
+            await uploadPhotoToClickUp(task.id, [userPhotoUrls[ctx.from.id]]);
+        }
+
+        // Update user step after task creation
+        userSteps[ctx.from.id] = 'task_created';
+
+        // Optionally, monitor the task status if required
+        monitorTaskStatus(task.id, ctx);
+
+        // Clear user state after task creation (to reset)
+        clearUserState(ctx.from.id);
+
+    } catch (error) {
+        const userLang = userLanguages[ctx.from.id] || 'uz';
+        console.error('Error processing task creation:', error.message);
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'So`rov yaratishda xatolik yuz berdi.'
+                : 'Произошла ошибка при создании запроса.'
+        );
+    }
+};
+
 const uploadPhotoToClickUp = async (taskId, photoUrls) => {
     console.log(photoUrls);
     const url = `https://api.clickup.com/api/v2/task/${taskId}/attachment`;
@@ -240,145 +363,6 @@ const uploadPhotoToClickUp = async (taskId, photoUrls) => {
     }
 };
 
-const assignUserToTask = async (taskId, assigneeId) => {
-    const url = `https://api.clickup.com/api/v2/task/${taskId}`;
-    const data = {
-        assignees: { add: [assigneeId] },
-        priority: 1,
-    };
-
-    try {
-        const response = await axios.put(url, data, {
-            headers: {
-                Authorization: CLICKUP_API_KEY,
-                'Content-Type': 'application/json',
-            },
-        });
-        console.log(`User with ID ${assigneeId} assigned to task ${taskId}`);
-        return response.data;
-    } catch (error) {
-        console.error(`Error assigning user to task ${taskId}:`, error.response?.data || error.message);
-        throw error;
-    }
-};
-
-const askForRestaurant = async (ctx, userLang) => {
-    await ctx.reply(
-        userLang === 'uz'
-            ? 'Iltimos, restoran nomini yozib yuboring:'
-            : 'Пожалуйста, напишите название ресторана:'
-    );
-};
-
-const askForProblemDescription = async (ctx, userLang) => {
-    const prompt = userLang === 'uz'
-        ? 'Iltimos, kelib chiqqan muammoni batafsil tasvirlab bering:'
-        : 'Пожалуйста, подробно опишите проблему с которой вы столкнулись:';
-    await ctx.reply(prompt);
-};
-
-const askForProblemType = async (ctx, userLang) => {
-    const prompt = userLang === 'uz'
-        ? 'Iltimos, kelib chiqqan muammoni ruknini tanlang:'  // Uzbek version
-        : 'Пожалуйста, выберите категорию проблемы с которой вы столкнулись:'; // Russian version
-
-    // Send a message with an inline keyboard to choose problem type
-    await ctx.reply(prompt, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: userLang === 'uz' ? 'Buyurtma bilan bog`liq xatolik' : 'Ошибка связанная с  заказом', callback_data: 'problem_Ошибка в заказе' }],
-                [{ text: userLang === 'uz' ? 'QR kodli chek bilan bog`liq muammo' : 'Проблема с печатью кода с QR кодом', callback_data: 'problem_Ошибка в QR коде' }],
-                [{ text: userLang === 'uz' ? 'Maxsulot MXIKi bilan bog`liq muammo' : 'Проблема с ИКПУ товаров', callback_data: 'problem_Ошибка в ИКПУ' }],
-            ],
-        },
-    });
-};
-
-const askForImageUpload = async (ctx, userLang) => {
-    const prompt = userLang === 'uz'
-        ? 'Iltimos, muammoni tasvirlaydigan rasmni yuboring:'
-        : 'Пожалуйста, отправьте изображение (скриншот), в котором можно увидеть ошибку:';
-    await ctx.reply(prompt);
-};
-
-const askForClientRole = async (ctx, userLang) => {
-    console.log("ask for client role");
-    const prompt = userLang === 'uz'
-        ? 'Lavozimingizni tanlang'
-        : 'Укажите вашу должность';
-
-
-    await ctx.reply(prompt, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: userLang === 'uz' ? 'Menejer' : 'Менеджер', callback_data: 'client_role_manager' }],
-                [{ text: userLang === 'uz' ? 'Yordamchi' : 'Помощник', callback_data: 'client_role_assistant' }],
-                [{ text: userLang === 'uz' ? 'Egasining o\'zi' : 'Владелец', callback_data: 'client_role_owner' }],
-                [{ text: userLang === 'uz' ? 'Boshqa' : 'Другое', callback_data: 'client_role_other' }],
-            ],
-        },
-    });
-};
-
-const askForFeedback = async (ctx, userLang) => {
-    const prompt = userLang === 'uz'
-        ? 'Muammo hal etildi. Iltimos, xizmatimizni baholang (1 dan 5 gacha):'
-        : 'Проблема решена. Пожалуйста, оцените наш сервис от 1 до 5:';
-
-    await ctx.reply(prompt, {
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: '⭐️', callback_data: 'feedback_1' }],
-                [{ text: '⭐️⭐️', callback_data: 'feedback_2' }],
-                [{ text: '⭐️⭐️⭐️', callback_data: 'feedback_3' }],
-                [{ text: '⭐️⭐️⭐️⭐️', callback_data: 'feedback_4' }],
-                [{ text: '⭐️⭐️⭐️⭐️⭐️', callback_data: 'feedback_5' }],
-            ],
-        },
-    });
-};
-
-const handleRestaurantSelection = async (ctx, userInput) => {
-    const userLang = userLanguages[ctx.from.id];
-    const selectedRestaurant = userInput.trim();
-
-    userRestaurants[ctx.from.id] = selectedRestaurant;
-
-    // Log and notify the user about the selected restaurant
-    console.log(`User ${ctx.from.id} selected restaurant: ${selectedRestaurant}`);
-    await ctx.reply(
-        userLang === 'uz'
-            ? `Siz ${selectedRestaurant} muassasi nomidan so'rov yaratypasiz!`
-            : `Вы создаете запрос от имени: ${selectedRestaurant}!`
-    );
-
-    // Proceed to the next step: ask for problem description
-    await askForProblemDescription(ctx, userLang);
-};
-
-const handleDescriptionInput = async (ctx, inputText) => {
-    const userLang = userLanguages[ctx.from.id];
-
-    userDescription[ctx.from.id] = inputText.trim();
-    console.log(`User ${ctx.from.id} provided description: ${inputText}`);
-    userSteps[ctx.from.id] = 'client_role';  // Переходим к выбору роли клиента
-    console.log("client_role choosing")
-
-    await askForImageUpload(ctx, userLang);
-};
-
-const sendWaitingMessage = async (ctx, userLang) => {
-    const waitingText = userLang === 'uz'
-        ? 'Iltimos, kuting... So\'rov yaratilmoqda.'
-        : 'Пожалуйста, подождите... Запрос создается.';
-
-    // Отправить сообщение о том, что нужно подождать
-    const sentMessage = await ctx.reply(waitingText);
-
-    // Сохраняем ID сообщения, чтобы потом удалить его
-    userSteps[ctx.from.id] = { ...userSteps[ctx.from.id], waitingMessageId: sentMessage.message_id };
-};
-
 const saveFeedbackToClickUp = async (userId, feedbackText, rating) => {
     const taskId = userTaskIds[userId];  // Получаем ID задачи пользователя
 
@@ -390,142 +374,173 @@ const saveFeedbackToClickUp = async (userId, feedbackText, rating) => {
     await addCommentToTask(taskId, feedbackComment); // Добавляем текст отзыва как комментарий
 };
 
-const processTaskCreation = async (ctx) => {
+const handleGroupMessages = async (ctx) => {
     try {
-        const userLang = userLanguages[ctx.from.id] || 'uz';
+        const userId = ctx.from.id;
+        console.log("fakk ishladi")
+        // Check if the user's step is 'create_request_yes'
+        if (userSteps[userId] === 'create_request_yes') {
+            console.log("fakk ishladiiiii")
+            const groupMessage = ctx.message.text || ctx.message.caption; // Handle both text and caption (for photos, etc.)
 
-        await sendWaitingMessage(ctx, userLang);
+            if (groupMessage) {
+                console.log(`Message from group: ${groupMessage}`);
 
-        const title = userSelectedProblems[ctx.from.id] || 'Problem';
-        const description = userDescription[ctx.from.id];
-        const restaurant = userRestaurants[ctx.from.id];
-        const clientRole = userContacts[ctx.from.id]?.role || 'Client';
-        const clientName = userContacts[ctx.from.id]?.firstName || 'Client Name';
-        const clientContact = userContacts[ctx.from.id]?.phoneNumber || 'Client Contact';
-        const task = await sendToClickUp({
-            title,
-            description,
-            restaurant,
-            clientRole,
-            clientName,
-            clientContact,
-            ctx
-        });
+                // You can store this message in the task description or take other actions
+                const taskDescription = groupMessage;
 
-        // important part for image upload
+                // Now you can create the task with this message as the description
+                await sendToClickUp({
+                    title: 'Group Request', // Customize title as needed
+                    description: taskDescription,
+                    ctx
+                });
 
-        if (userPhotoUrls[ctx.from.id]) {
-            await uploadPhotoToClickUp(task.id, [userPhotoUrls[ctx.from.id]]);
+                // After processing, clear the user's step to avoid repeated triggering
+                userSteps[userId] = null;
+
+                await ctx.reply("Your request has been submitted successfully!");
+            }
         }
-
-        // important part for image upload
-
-        userTaskIds[ctx.from.id] = task.id;
-        userSteps[ctx.from.id] = 'task_created';
-        monitorTaskStatus(task.id, ctx);
-
-        // Clear user state after task is created
-        clearUserState(ctx.from.id);
     } catch (error) {
-        const userLang = userLanguages[ctx.from.id] || 'uz';
-        console.error('Error processing task creation:', error.message);
-        await ctx.reply(
-            userLang === 'uz'
-                ? 'So`rov yaratishda xatolik yuz berdi.'
-                : 'Произошла ошибка при создании запроса.'
-        );
+        console.error('Error processing group message:', error);
     }
 };
 
-const clearUserState = (userId) => {
-    delete userLanguages[userId];
-    delete userRestaurants[userId];
-    delete userDescription[userId];
-    delete userContacts[userId];
-    delete userSelectedProblems[userId];
-    delete userPhotoUrls[userId];
+const askForRestaurant = async (ctx, userLang) => {
+    await ctx.reply(
+        userLang === 'uz'
+            ? 'Iltimos, restoran nomini yozib yuboring:'
+            : 'Пожалуйста, напишите название ресторана:'
+    );
 };
 
+bot.command('create',async (ctx) => {
+    userSteps[ctx.from.id] = 'want_to_create';
+    const userLang = userLanguages[ctx.from.id] || 'uz';
 
-bot.start((ctx) => {
-    userSteps[ctx.from.id] = 'language';
-    console.log("lang")
-    ctx.reply(
-        `Assalomu alaykum, ${ctx.from.first_name || 'there'}! Veda Vector jamosining 24/7 qollab quvvatlash xizmatiga xush kelibsiz! Iltimos sizga qulay tilni tanlang:`,
+    console.log("want_to_create");
+
+    await ctx.reply(
+        `Assalomu alaykum, ${ctx.from.first_name || 'hurmatli foydalanuvchi'}! Veda Vector jamosining 24/7 qo‘llab-quvvatlash xizmatiga xush kelibsiz! 
+        
+        
+Здравствуйте, ${ctx.from.first_name || 'уважаемый пользователь'}! Добро пожаловать в круглосуточную поддержку команды Veda Vector!`
+    );
+
+
+    await ctx.reply(
+        `Siz yangi so'rov yaratmoqchimisiz? Iltimos, "Ha" yoki "Yo'q" deb javob bering.
+        \n
+Вы хотите создать новый запрос? Пожалуйста, ответьте "Да" или "Нет".`,
         {
             reply_markup: {
                 inline_keyboard: [
-                    [{ text: 'Uzbek tili', callback_data: 'lang_uz' }],
-                    [{ text: 'Русский', callback_data: 'lang_ru' }],
+                    [{ text: 'Ha (Да)', callback_data: 'create_request_yes' }],
+                    [{ text: 'Yo\'q (Нет)', callback_data: 'create_request_no' }],
                 ],
             },
         }
     );
 });
 
-bot.command('stop', async (ctx) => {
+bot.command('stop',async (ctx) => {
     const userId = ctx.from.id;
+    const userLang = userLanguages[userId] || 'uz';
 
     clearUserState(userId);
 
-    const userLang = userLanguages[userId] || 'uz';
-
     await ctx.reply(
         userLang === 'uz'
-            ? 'Sizning arizangiz bekor qilindi. Yangi yaratish uchun /start ni bosing.'
-            : 'Ваша заявка была отменена. Чтобы создать новое нажмите на /start .'
+            ? 'Sizning arizangiz bekor qilindi. Yangi yaratish uchun /create ni bosing.'
+            : 'Ваша заявка была отменена. Чтобы создать новое нажмите на /create .'
     );
 });
 
-bot.on('contact', async (ctx) => {
-    const contact = ctx.message.contact;
-    userSteps[ctx.from.id] = 'contact';
-    console.log("contacts")
-    userContacts[ctx.from.id] = {
-        phoneNumber: contact.phone_number,
-        firstName: contact.first_name,
-        lastName: contact.last_name || '',
-    };
-    console.log('User Contact:', userContacts[ctx.from.id]);
+bot.on('callback_query', async (ctx) => {
+    const userId = ctx.from.id;
+    const data = ctx.callbackQuery.data;
+    const currentStep = userSteps[userId];
+    const userLang = userLanguages[userId] || 'uz';
 
-    const userLang = userLanguages[ctx.from.id];
-    if (userLang) {
-        await askForProblemType(ctx, userLang); // Ask for problem type after contact info
-    } else {
-        await ctx.reply('Iltimos, tilni tanlang (Please select a language):');
+    if (data.startsWith('problem_')) {
+        userSelectedProblems[userId] = data.replace('problem_', '');
+        userSteps[userId] = 'problem_type';
+
+        await ctx.answerCbQuery();
+        await ctx.reply(
+            `Muammo yaratildi tasvirlab bering iltimos:
+        \n
+Заявка успешно создано, пожалуйста опишите:`
+        );
+        await processTaskCreation(ctx)
+        await askForRestaurant(ctx, userLang)
+        return;
     }
-});
 
-bot.on('photo', async (ctx) => {
-    try {
-        const userLang = userLanguages[ctx.from.id] || 'uz';
+    if (data.startsWith('feedback_')) {
+        userFeedbacks[userId] = { rating };
+        console.log(userFeedbacks[userId]);
+        const rating = parseInt(data.split('_')[1], 10);
 
-        const photo = ctx.message.photo[ctx.message.photo.length - 1];
-        const fileId = photo.file_id;
-
-        const fileDetails = await ctx.telegram.getFile(fileId);
-        const filePath = fileDetails.file_path;
-
-        userPhotoUrls[ctx.from.id] = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
-        console.log(`helloooooo  ${userPhotoUrls[ctx.from.id]}`);
-        await askForClientRole(ctx, userLang);
-
-    } catch (error) {
-        const userLang = userLanguages[ctx.from.id] || 'uz';
+        await ctx.answerCbQuery();
         await ctx.reply(
             userLang === 'uz'
-                ? 'Rasmni qayta yuboring, xatolik yuz berdi.'
-                : 'Отправьте изображение снова, произошла ошибка.'
+                ? `Rahmat! Siz ${rating} ball bilan baholadingiz. Iltimos, xizmatimiz haqidagi fikrlaringizni yozing:`
+                : `Спасибо! Вы оценили нас на ${rating} баллов. Пожалуйста, напишите свой отзыв о нашем сервисе:`
+        );
+
+        userSteps[userId] = 'feedback_text';
+        return;
+    }
+
+    if (currentStep === 'client_role') {
+        if (data.startsWith('client_role_')) {
+            const clientRole = data;
+            const roleName = roles[clientRole][userLang];
+
+            userContacts[userId].role = clientRole;
+            console.log(`User ${userId} selected client role: ${roleName}`);
+            userContacts[userId].role = roles[clientRole]?.[userLang] || 'Unknown role';
+
+            await ctx.answerCbQuery(); // Подтверждаем клик
+            await processTaskCreation(ctx); // Продолжаем процесс создания заявки
+
+            await ctx.reply(
+                userLang === 'uz'
+                    ? `Siz ${roleName} rolini tanladingiz. So'rov muvaffaqiyatli yaratildi.`
+                    : `Вы выбрали роль ${roleName}. Задача успешно создана.`
+            );
+
+            await ctx.reply(
+                userLang === 'uz'
+                    ? `Eng qisqa vaqtda xodimlarimiz aloqaga chiqishadi.`
+                    : `В самое ближайшее время наши сотрудники выйдут на связь.`
+            );
+            console.log(`User ${userId} step changed to 'image'.`);
+
+        } else {
+            console.log(`Unexpected callback query data: ${data}`);
+        }
+    }
+
+    if (data === 'create_request_yes') {
+        userSteps[userId] = 'problem_type';
+
+        await ctx.answerCbQuery();
+        await askForProblemType(ctx, userLang);
+    }
+
+    else if (data === 'create_request_no') {
+        clearUserState(userId);
+
+        await ctx.answerCbQuery();
+        await ctx.reply(
+            `Sizning arizangiz bekor qilindi. Yangi yaratish uchun /create ni bosing.
+            \n
+Процесс создания запроса отменен. Чтобы создать новое нажмите на /create.`
         );
     }
-});
-
-bot.on('callback_query', async (ctx) => {
-    const data = ctx.callbackQuery.data;
-    const userId = ctx.from.id;
-    const userLang = userLanguages[userId] || 'uz';
-    const currentStep = userSteps[userId];
-    console.log(data)
 
     if (data.startsWith('problem_solved_')) {
         if (data === 'problem_solved_yes') {
@@ -549,172 +564,19 @@ bot.on('callback_query', async (ctx) => {
         return;
     }
 
-    if (data.startsWith('problem_')) {
-        userSelectedProblems[userId] = data.replace('problem_', '');
-        userSteps[userId] = 'problem_type';
-
-        await ctx.answerCbQuery();
-        await ctx.reply(
-            userLang === 'uz'
-                ? 'Muammo rukni tanlandi. Iltimos, muassasa nomini kiriting:'
-                : 'Категория проблемы выбрана. Пожалуйста, напишите название заведения:'
-        );
-        return;
-
-    }
-
-    if (data === 'lang_uz' || data === 'lang_ru') {
-        const lang = data.split('_')[1];
-        userLanguages[userId] = lang;
-
-        await ctx.answerCbQuery();
-        await ctx.reply(
-            lang === 'uz'
-                ? 'Til uzbek tiliga o\'zgardi! Iltimos, kontakt ma\'lumotlaringizni ulashing:'
-                : 'Язык установлен на русский! Пожалуйста, поделитесь своими контактными данными:',
-            {
-                reply_markup: {
-                    keyboard: [[{ text: lang === 'uz' ? 'Kontakt ulashish' : 'Поделиться контактом', request_contact: true }]],
-                    resize_keyboard: true,
-                    one_time_keyboard: true,
-                },
-            }
-        );
-        return;
-    }
-
-    if (currentStep === 'client_role') {
-        if (data.startsWith('client_role_')) {
-            const clientRole = data;
-            const roleName = roles[clientRole][userLang];
-
-            userContacts[userId].role = clientRole;
-            console.log(`User ${userId} selected client role: ${roleName}`);
-            const readableRole = roles[clientRole]?.[userLang] || 'Unknown role';
-            userContacts[userId].role = readableRole;
-
-            await ctx.answerCbQuery(); // Подтверждаем клик
-            await processTaskCreation(ctx); // Продолжаем процесс создания заявки
-
-            await ctx.reply(
-                userLang === 'uz'
-                    ? `Siz ${roleName} rolini tanladingiz. So'rov muvaffaqiyatli yaratildi.`
-                    : `Вы выбрали роль ${roleName}. Задача успешно создана.`
-            );
-
-            await ctx.reply(
-                userLang === 'uz'
-                    ? `Eng qisqa vaqtda xodimlarimiz aloqaga chiqishadi.`
-                    : `В самое ближайшее время наши сотрудники выйдут на связь.`
-            );
-            console.log(`User ${userId} step changed to 'image'.`);
-
-        } else {
-            console.log(`Unexpected callback query data: ${data}`);
-        }
-    }
-
-    if (data.startsWith('feedback_')) {
-        const rating = parseInt(data.split('_')[1], 10);
-        userFeedbacks[userId] = { rating };  // Сохраняем рейтинг пользователя
-        console.log(userFeedbacks[userId]);
-        await ctx.answerCbQuery();
-        await ctx.reply(
-            userLang === 'uz'
-                ? `Rahmat! Siz ${rating} ball bilan baholadingiz. Iltimos, xizmatimiz haqidagi fikrlaringizni yozing:`
-                : `Спасибо! Вы оценили нас на ${rating} баллов. Пожалуйста, напишите свой отзыв о нашем сервисе:`
-        );
-
-        userSteps[userId] = 'feedback_text';
-        return;
-    }
-
-    if (data === 'cancel_task_creation') {
-        clearUserState(userId);
-        await ctx.answerCbQuery();
-
-        const userLang = userLanguages[userId] || 'uz';
-        await ctx.reply(
-            userLang === 'uz'
-                ? 'So`rov yaratish jarayoni bekor qilindi.'
-                : 'Процесс создания запроса отменен.'
-        );
-        return;
-    }
-
     console.log(`Unhandled callback query: ${data}`);
 });
 
-bot.on('callback_query', async (ctx) => {
-    const data = ctx.callbackQuery.data;
-
-    if (data === 'lang_uz' || data === 'lang_ru') {
-        const lang = data.split('_')[1];
-        userLanguages[ctx.from.id] = lang;
-
-        // Убираем инлайн-клавиатуру
-        try {
-            await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-        } catch (error) {
-            console.error('Ошибка при удалении кнопок:', error.message);
-        }
-
-        // Отвечаем на callback
-        await ctx.answerCbQuery();
-
-        // Отправляем новое сообщение с обычной клавиатурой
-        await ctx.reply(
-            lang === 'uz'
-                ? 'Til uzbek tiliga o\'zgardi! Iltimos, kontakt ma\'lumotlaringizni ulashing:'
-                : 'Язык установлен на русский! Пожалуйста, поделитесь своими контактными данными:',
-            {
-                reply_markup: {
-                    keyboard: [
-                        [{ text: lang === 'uz' ? 'Kontakt ulashish' : 'Поделиться контактом', request_contact: true }],
-                    ],
-                    resize_keyboard: true,
-                    one_time_keyboard: true,
-                },
-            }
-        );
-    }
-});
-
-bot.on('text', async (ctx) => {
-    const userId = ctx.from.id;
-    const userLang = userLanguages[userId] || 'uz';
-    const currentStep = userSteps[userId];
-
-    console.log(`Current step: ${currentStep}`);
-
-    if (currentStep === 'problem_type') {
-        await handleRestaurantSelection(ctx, ctx.message.text);
-        userSteps[userId] = 'description';
-    } else if (currentStep === 'description') {
-        await handleDescriptionInput(ctx, ctx.message.text);
-        userSteps[userId] = 'client_role';
-    } else if (currentStep === 'client_role') {
-        console.log("hello client role");
-    } else if (currentStep === 'feedback_text') {
-        const feedbackText = ctx.message.text;
-        const rating = userFeedbacks[ctx.from.id]?.rating;
-        console.log(`Feedback rating ${rating}`);
-        await saveFeedbackToClickUp(userId, feedbackText, rating);
-
-        await ctx.reply(
-            userLang === 'uz'
-                ? 'Fikr-mulohazangiz qabul qilindi. Rahmat!'
-                : 'Ваш отзыв принят. Спасибо!'
-        );
-
-        clearUserState(userId);
-    }
+bot.on('message', (ctx) => {
+    console.log("ishladi")
+    console.log(ctx)
+    handleGroupMessages(ctx)
 });
 
 
-bot.launch()
-    .then(() => console.log('Bot is running...'))
-    .catch((err) => console.error('Failed to start bot:', err));
+bot.launch().then(() => {
+    console.log('Bot started successfully.');
+});
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
