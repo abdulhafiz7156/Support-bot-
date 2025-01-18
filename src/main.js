@@ -1,17 +1,25 @@
 const axios = require('axios');
 const FormData = require('form-data');
+const Task = require('./models/Task');  // Import the simplified Task model
 const { Telegraf } = require('telegraf');
 const {message} = require("telegraf/filters");
+const mysql = require('mysql2');
+const fetch = require('node-fetch'); // Assuming you're using node-fetch for HTTP requests
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+const pool = mysql.createPool({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+});
+
 const path = require('path');
-
-const CLICKUP_LIST_ID = '901804634528';
 const BOT_TOKEN = '7712404901:AAFmA0FeK_NSxRw3O6SWRHUlAuSfgJ5NsLk';
-const CLICKUP_API_KEY = 'pk_158692681_BDRAASUB1DTHX9I061Y9CT0HY4ITML27';
 
-// Xafiz list id 901804725083
-// Veda Vectore list id 901804634528
 const bot = new Telegraf(BOT_TOKEN);
-
 const userSteps = {};
 const userTaskIds = {};
 const userContacts = {};
@@ -21,6 +29,8 @@ const userFeedbacks = {};
 const userRestaurants = {};
 const userDescription = {};
 const userSelectedProblems = {};
+
+let tasks = [];
 
 const roles = {
     'client_role_manager': {
@@ -46,34 +56,70 @@ bot.telegram.setMyCommands([
     { command: 'stop', description: 'Отмена заявки' },
 ]);
 
-const sendToClickUp = async ({ title, description, ctx }) => {
-    console.log(`Creating task for problem type: ${title}`);
-    const url = `https://api.clickup.com/api/v2/list/${CLICKUP_LIST_ID}/task`;
+const sendToClickUp = async ({ title, description, selectedProblem, ctx, chatId, chatDescription }) => {
+    let listId;
+
+    if (selectedProblem === 'financial') {
+        listId = process.env.TECH_LIST_ID;
+    } else {
+        switch (selectedProblem) {
+            case 'technical':
+                listId = process.env.TECH_LIST_ID;
+                break;
+            case 'material':
+                listId = process.env.MAT_LIST_ID;
+                break;
+            default:
+                throw new Error(`Invalid problem type: ${selectedProblem}`);
+        }
+    }
+
+    const url = `https://api.clickup.com/api/v2/list/${listId}/task`;
+
     const data = {
-        name: title,  // Title comes from the problem type selected
-        description: description || 'No description provided', // Default to a simple message if no description is given
+        name: title,
+        description: description || 'No description provided',
+    };
+
+    const headers = {
+        'Authorization': process.env.CLICKUP_API_KEY,
+        'Content-Type': 'application/json',
     };
 
     try {
-        const response = await axios.post(url, data, {
-            headers: {
-                Authorization: CLICKUP_API_KEY,
-                'Content-Type': 'application/json',
-            },
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(data),
         });
-        console.log('Task created successfully:', response.data.id);
 
-        const taskId = response.data.id;
+        const responseData = await response.json();
 
-        userTaskIds[ctx.from.id] = taskId; // Save task ID in user state
+        if (response.ok) {
+            console.log('Task created successfully:', responseData);
 
-        // Assign task to a default user or team member (can be changed later)
-        assignUserToTask(taskId, '5725322'); // For example, assign to user with ID '5725322'
+            // Save task ID and chat ID to MySQL
+            const taskId = responseData.id;  // Task ID from ClickUp response
 
-        return response.data;
+            const query = 'INSERT INTO tasks (taskId, chatId) VALUES (?, ?)';
+            pool.execute(query, [taskId, chatId], (err, results) => {
+                if (err) {
+                    console.error('Error saving task to MySQL:', err);
+                    throw new Error('Error saving task to MySQL');
+                }
+
+                console.log('Task saved to MySQL:', results);
+            });
+
+            // Return the task data, including the ID
+            return { taskId, chatId };
+        } else {
+            console.error('Error creating task:', responseData);
+            throw new Error('Error creating task in ClickUp');
+        }
     } catch (error) {
-        console.error('Error creating task in ClickUp:', error.response?.data || error.message);
-        throw error;
+        console.error('Error making request to ClickUp API:', error);
+        throw new Error('Error processing request');
     }
 };
 
@@ -104,56 +150,6 @@ const askForFeedback = async (ctx, userLang) => {
     });
 };
 
-const checkTaskStatus = async (taskId, ctx) => {
-    const url = `https://api.clickup.com/api/v2/task/${taskId}`;
-
-    try {
-        const response = await axios.get(url, {
-            headers: {
-                Authorization: CLICKUP_API_KEY,
-            },
-        });
-
-        const taskStatus = response.data.status.status;
-        const userLang = userLanguages[ctx.from.id];
-
-        console.log(`Task ${taskId} status: ${taskStatus}`);
-
-        // Initialize user data if not present
-        if (!userLanguages[ctx.from.id]) {
-            userLanguages[ctx.from.id] = {
-                language: 'en', // Default language can be set to 'en' or the detected language
-                isTaskStatusChanged: false, // Set initial value to false
-            };
-        }
-
-        // Check if the status is "Confirmation", or 2 or 3
-        if (taskStatus === "confirmation" || taskStatus === "2" || taskStatus === "3") {
-            // Avoid prompting multiple times by checking if the status update was already handled
-            if (!userLanguages[ctx.from.id].isTaskStatusChanged) {
-                await ctx.reply(
-                    userLang === 'uz'
-                        ? 'Muammo hal bo\'ldimi? Iltimos, tanlang:'
-                        : 'Проблема решена? Пожалуйста, выберите:',
-                    {
-                        reply_markup: {
-                            inline_keyboard: [
-                                [{ text: userLang === 'uz' ? 'Ha' : 'Да', callback_data: 'problem_solved_yes' }],
-                                [{ text: userLang === 'uz' ? 'Yo\'q' : 'Нет', callback_data: 'problem_solved_no' }],
-                            ],
-                        },
-                    }
-                );
-
-                // Set flag to prevent further asking for status
-                userLanguages[ctx.from.id].isTaskStatusChanged = true;
-            }
-        }
-    } catch (error) {
-        console.error('Error checking task status:', error.message);
-    }
-};
-
 const addCommentToTask = async (taskId, commentText) => {
     console.log(commentText)
     const url = `https://api.clickup.com/api/v2/task/${taskId}/comment`;
@@ -164,7 +160,7 @@ const addCommentToTask = async (taskId, commentText) => {
     try {
         const response = await axios.post(url, data, {
             headers: {
-                Authorization: CLICKUP_API_KEY,
+                Authorization: process.env.CLICKUP_API_KEY,
                 'Content-Type': 'application/json',
             },
         });
@@ -187,7 +183,7 @@ const updateTaskStatus = async (newStatus, ctx) => {
     try {
         const response = await axios.put(url, data, {
             headers: {
-                Authorization: CLICKUP_API_KEY,
+                Authorization: process.env.CLICKUP_API_KEY,
                 'Content-Type': 'application/json',
             },
         });
@@ -228,7 +224,7 @@ const assignUserToTask = async (taskId, assigneeId) => {
     try {
         const response = await axios.put(url, data, {
             headers: {
-                Authorization: CLICKUP_API_KEY,
+                Authorization: process.env.CLICKUP_API_KEY,
                 'Content-Type': 'application/json',
             },
         });
@@ -248,7 +244,7 @@ const askForProblemType = async (ctx, userLang) => {
     await ctx.reply(prompt, {
         reply_markup: {
             inline_keyboard: [
-                [{ text: userLang === 'uz' ? 'Технический вопрос (Texnik savol)' : '', callback_data: 'problem_technicla' }],
+                [{ text: userLang === 'uz' ? 'Технический вопрос (Texnik savol)' : '', callback_data: 'problem_technical' }],
                 [{ text: userLang === 'uz' ? 'Вопрос к фин отделу (Moliya bo\'limi uchun savol)' : '', callback_data: 'problem_financial' }],
                 [{ text: userLang === 'uz' ? 'Вопрос к мат отделу (Material bo\'limi uchun savol)' : '', callback_data: 'problem_material' }],
             ],
@@ -261,12 +257,6 @@ const askForImageUpload = async (ctx, userLang) => {
         ? 'Iltimos, muammoni tasvirlaydigan rasmni yuboring:'
         : 'Пожалуйста, отправьте изображение (скриншот), в котором можно увидеть ошибку:';
     await ctx.reply(prompt);
-};
-
-const monitorTaskStatus = (taskId, ctx) => {
-    setInterval(() => {
-        checkTaskStatus(taskId, ctx);
-    }, 10000);  // Check every 10 seconds (or adjust as needed)
 };
 
 const sendWaitingMessage = async (ctx, userLang) => {
@@ -292,11 +282,13 @@ const processTaskCreation = async (ctx) => {
         const chat = await ctx.telegram.getChat(ctx.chat.id); // Get chat details
         const chatDescription = chat.description || 'Нету описании группы';
 
-
         const task = await sendToClickUp({
             title,
             description: chatDescription,
             ctx,
+            chatId: ctx.chat.id,
+            selectedProblem: userSelectedProblems[ctx.from.id],
+            chatDescription: chatDescription,
         });
 
         await ctx.reply("Endi iltimos ma'lumot bering(rasm, text, video message, voice)")
@@ -306,16 +298,12 @@ const processTaskCreation = async (ctx) => {
             await uploadPhotoToClickUp(task.id, [userPhotoUrls[ctx.from.id]]);
         }
 
-        // Update user step after task creation
         userSteps[ctx.from.id] = 'task_created';
 
-        // Optionally, monitor the task status if required
-        monitorTaskStatus(task.id, ctx);
-
-        // Clear user state after task creation (to reset)
         clearUserState(ctx.from.id);
 
     } catch (error) {
+        console.log(error);
         const userLang = userLanguages[ctx.from.id] || 'uz';
         console.error('Error processing task creation:', error.message);
         await ctx.reply(
@@ -352,7 +340,7 @@ const uploadPhotoToClickUp = async (taskId, photoUrls) => {
         const response = await axios.post(url, formData, {
             headers: {
                 ...formData.getHeaders(),
-                Authorization: CLICKUP_API_KEY,
+                Authorization: process.env.CLICKUP_API_KEY,
             },
         });
         console.log('Photos uploaded successfully:', response.data);
@@ -375,51 +363,34 @@ const saveFeedbackToClickUp = async (userId, feedbackText, rating) => {
 };
 
 const handleGroupMessages = async (ctx) => {
-    try {
-        const userId = ctx.from.id;
-        console.log("fakk ishladi")
-        // Check if the user's step is 'create_request_yes'
-        if (userSteps[userId] === 'create_request_yes') {
-            console.log("fakk ishladiiiii")
-            const groupMessage = ctx.message.text || ctx.message.caption; // Handle both text and caption (for photos, etc.)
-
-            if (groupMessage) {
-                console.log(`Message from group: ${groupMessage}`);
-
-                // You can store this message in the task description or take other actions
-                const taskDescription = groupMessage;
-
-                // Now you can create the task with this message as the description
-                await sendToClickUp({
-                    title: 'Group Request', // Customize title as needed
-                    description: taskDescription,
-                    ctx
-                });
-
-                // After processing, clear the user's step to avoid repeated triggering
-                userSteps[userId] = null;
-
-                await ctx.reply("Your request has been submitted successfully!");
-            }
-        }
-    } catch (error) {
-        console.error('Error processing group message:', error);
-    }
+    const userId = ctx.from.id;
+    console.log(userId);
+    console.log("faak ishladi");
 };
 
-const askForRestaurant = async (ctx, userLang) => {
-    await ctx.reply(
-        userLang === 'uz'
-            ? 'Iltimos, restoran nomini yozib yuboring:'
-            : 'Пожалуйста, напишите название ресторана:'
-    );
+const getChatIdByTaskId = (taskId) => {
+    const task = tasks.find(t => t.taskId === taskId);
+    return task ? task.chatId : null;
 };
 
 bot.command('create',async (ctx) => {
-    userSteps[ctx.from.id] = 'want_to_create';
-    const userLang = userLanguages[ctx.from.id] || 'uz';
+    const userId = ctx.from.id;
+    const chat_id = ctx.chat.id;
+    bot.chatId = chat_id;
+    console.log("Received message from chat_id:", chat_id);
+    if (userSteps[userId] === 'task_created' || userSteps[userId] === 'waiting' || userSteps[userId] === 'problem_type') {
+        await ctx.reply(
+            `Sizda hozirda ochiq so\'rov mavjud. Iltimos, uni yakunlang yoki kuting.
+                 
+               
+У вас уже есть открытая заявка. Пожалуйста, завершите её или подождите.`
+        );
+        return;
+    }
 
-    console.log("want_to_create");
+
+    userSteps[ctx.from.id] = 'want_to_create';
+
 
     await ctx.reply(
         `Assalomu alaykum, ${ctx.from.first_name || 'hurmatli foydalanuvchi'}! Veda Vector jamosining 24/7 qo‘llab-quvvatlash xizmatiga xush kelibsiz! 
@@ -450,6 +421,15 @@ bot.command('stop',async (ctx) => {
 
     clearUserState(userId);
 
+    if (userSteps[userId] !== 'task_created') {
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'Hozirgi vaqtda hech qanday ariza mavjud emas.'
+                : 'В данный момент нет активных заявок.'
+        );
+        return;
+    }
+
     await ctx.reply(
         userLang === 'uz'
             ? 'Sizning arizangiz bekor qilindi. Yangi yaratish uchun /create ni bosing.'
@@ -474,7 +454,6 @@ bot.on('callback_query', async (ctx) => {
 Заявка успешно создано, пожалуйста опишите:`
         );
         await processTaskCreation(ctx)
-        await askForRestaurant(ctx, userLang)
         return;
     }
 
@@ -567,16 +546,26 @@ bot.on('callback_query', async (ctx) => {
     console.log(`Unhandled callback query: ${data}`);
 });
 
-bot.on('message', (ctx) => {
-    console.log("ishladi")
-    console.log(ctx)
-    handleGroupMessages(ctx)
-});
+bot.on(message('text'), async (ctx) => {
+    console.log("Message received");
+    console.log("Chat Type:", ctx.chat.type);
+    console.log("Message:", ctx.message);
 
+        console.log("Group message received:", ctx.message.text);
+
+        await handleGroupMessages(ctx);
+});
 
 bot.launch().then(() => {
     console.log('Bot started successfully.');
 });
+
+module.exports = {
+    bot,
+    getChatIdByTaskId,
+    processTaskCreation,
+    sendToClickUp
+};
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
