@@ -1,10 +1,10 @@
 const axios = require('axios');
 const FormData = require('form-data');
-const Task = require('./models/Task');  // Import the simplified Task model
+const Task = require('./models/Task');
 const { Telegraf } = require('telegraf');
 const {message} = require("telegraf/filters");
 const mysql = require('mysql2');
-const fetch = require('node-fetch'); // Assuming you're using node-fetch for HTTP requests
+const fetch = require('node-fetch');
 const dotenv = require('dotenv');
 
 dotenv.config();
@@ -32,35 +32,72 @@ const userSelectedProblems = {};
 
 let tasks = [];
 
-const roles = {
-    'client_role_manager': {
-        uz: 'Menejer',
-        ru: 'Менеджер'
-    },
-    'client_role_assistant': {
-        uz: 'Yordamchi',
-        ru: 'Помощник'
-    },
-    'client_role_owner': {
-        uz: 'Egasining o\'zi',
-        ru: 'Владелец'
-    },
-    'client_role_other': {
-        uz: 'Boshqa',
-        ru: 'Другое'
-    }
-};
 
 bot.telegram.setMyCommands([
     { command: 'create', description: 'Создание заявки' },
     { command: 'stop', description: 'Отмена заявки' },
+    { command: 'finish', description: 'Удалить задание' },
 ]);
 
 const sendToClickUp = async ({ title, description, selectedProblem, ctx, chatId, chatDescription }) => {
     let listId;
+    console.log(`eee ${chatDescription} or i have ${chatId}??`);
+    const folderId = '90183057235';
 
     if (selectedProblem === 'financial') {
-        listId = process.env.TECH_LIST_ID;
+        const lists = await getClickUpListsForFolder(folderId);
+        console.log(lists[0].name === chatDescription);
+        const matchingList = lists.find(list => list.name === chatDescription);
+
+        if (!matchingList) {
+            await ctx.reply('Не найден соответствующий список для указанного чата. Проверьте данные.');
+            throw new Error('No matching list found');
+        }
+
+        listId = matchingList.id;
+
+        const data = {
+            name: 'Заявка от клиента',
+            description: chatDescription, // Now the description is the chat name
+        };
+
+        const createTaskUrl = `https://api.clickup.com/api/v2/list/${listId}/task`;
+
+        try {
+            const createTaskResponse = await fetch(createTaskUrl, {
+                method: 'POST',
+                headers: {
+                    'Authorization': process.env.CLICKUP_API_KEY,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data),
+            });
+
+            const createTaskResponseData = await createTaskResponse.json();
+
+            if (createTaskResponse.ok) {
+                console.log('Task created successfully:', createTaskResponseData);
+
+                const taskId = createTaskResponseData.id;
+                const query = 'INSERT INTO tasks (taskId, chatId) VALUES (?, ?)';
+                pool.execute(query, [taskId, chatId], (err, results) => {
+                    if (err) {
+                        console.error('Error saving task to MySQL:', err);
+                        throw new Error('Error saving task to MySQL');
+                    }
+                    console.log('Task saved to MySQL:', results);
+                });
+
+                return { taskId, chatId };
+            } else {
+                console.error('Error creating task:', createTaskResponseData);
+                throw new Error('Error creating task in ClickUp');
+            }
+        } catch (error) {
+            console.error('Error creating task in ClickUp API:', error);
+            throw new Error('Error creating task');
+        }
+
     } else {
         switch (selectedProblem) {
             case 'technical':
@@ -72,54 +109,126 @@ const sendToClickUp = async ({ title, description, selectedProblem, ctx, chatId,
             default:
                 throw new Error(`Invalid problem type: ${selectedProblem}`);
         }
+
+        const data = {
+            name: "Заявка от клиента",
+            description: chatDescription, // Now the description is the chat name
+            priority: 1
+        };
+
+        const headers = {
+            'Authorization': process.env.CLICKUP_API_KEY,
+            'Content-Type': 'application/json',
+        };
+
+        const url = `https://api.clickup.com/api/v2/list/${listId}/task`;
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify(data),
+            });
+
+            const responseData = await response.json();
+
+            if (response.ok) {
+                console.log('Task created successfully:', responseData);
+
+                const taskId = responseData.id;
+                const query = 'INSERT INTO tasks (taskId, chatId) VALUES (?, ?)';
+                pool.execute(query, [taskId, chatId], (err, results) => {
+                    if (err) {
+                        console.error('Error saving task to MySQL:', err);
+                        throw new Error('Error saving task to MySQL');
+                    }
+                    console.log('Task saved to MySQL:', results);
+                });
+
+                return { taskId, chatId };
+            } else {
+                console.error('Error creating task:', responseData);
+                throw new Error('Error creating task in ClickUp');
+            }
+        } catch (error) {
+            console.error('Error making request to ClickUp API:', error);
+            throw new Error('Error processing request');
+        }
     }
+};
 
-    const url = `https://api.clickup.com/api/v2/list/${listId}/task`;
-
-    const data = {
-        name: title,
-        description: description || 'No description provided',
-    };
-
-    const headers = {
-        'Authorization': process.env.CLICKUP_API_KEY,
-        'Content-Type': 'application/json',
-    };
+const getClickUpListsForFolder = async (folderId) => {
+    const url = `https://api.clickup.com/api/v2/folder/${folderId}/list`;
 
     try {
         const response = await fetch(url, {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify(data),
+            method: 'GET',
+            headers: {
+                'Authorization': process.env.CLICKUP_API_KEY,
+                'Content-Type': 'application/json',
+            }
         });
 
         const responseData = await response.json();
 
+        if (!response.ok) {
+            console.error('Error fetching lists:', responseData);
+            throw new Error('Error fetching lists from ClickUp');
+        }
+
+        // Return the lists from the folder
+        return responseData.lists || [];
+    } catch (error) {
+        console.error('Error fetching lists from ClickUp API:', error);
+        throw new Error('Error fetching lists from ClickUp');
+    }
+};
+
+const deleteTaskFromClickUp = async (taskId) => {
+    const deleteTaskUrl = `https://api.clickup.com/api/v2/task/${taskId}`;
+
+    try {
+        const response = await fetch(deleteTaskUrl, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': process.env.CLICKUP_API_KEY,
+            },
+        });
+
         if (response.ok) {
-            console.log('Task created successfully:', responseData);
-
-            // Save task ID and chat ID to MySQL
-            const taskId = responseData.id;  // Task ID from ClickUp response
-
-            const query = 'INSERT INTO tasks (taskId, chatId) VALUES (?, ?)';
-            pool.execute(query, [taskId, chatId], (err, results) => {
-                if (err) {
-                    console.error('Error saving task to MySQL:', err);
-                    throw new Error('Error saving task to MySQL');
-                }
-
-                console.log('Task saved to MySQL:', results);
-            });
-
-            // Return the task data, including the ID
-            return { taskId, chatId };
+            console.log(`Task with ID ${taskId} deleted successfully from ClickUp.`);
         } else {
-            console.error('Error creating task:', responseData);
-            throw new Error('Error creating task in ClickUp');
+            const responseData = await response.json();
+            console.error('Error deleting task:', responseData);
+            throw new Error('Error deleting task in ClickUp');
         }
     } catch (error) {
-        console.error('Error making request to ClickUp API:', error);
-        throw new Error('Error processing request');
+        console.error('Error in deleteTaskFromClickUp:', error);
+        throw new Error('Failed to delete task from ClickUp');
+    }
+};
+
+const deleteTask = async (ctx) => {
+    const chatId = ctx.chat.id;
+
+    try {
+        const taskId = await getLatestTaskId(chatId);
+
+        if (!taskId) {
+            console.log('No task found for chatId:', chatId);
+            await ctx.reply('No active task found to delete.');
+            return;
+        }
+
+        await deleteTaskFromClickUp(taskId);
+
+        const deleteQuery = 'DELETE FROM tasks WHERE taskId = ?';
+        await pool.execute(deleteQuery, [taskId]);
+
+        console.log(`Task with ID ${taskId} deleted successfully from database.`);
+    } catch (error) {
+        console.error('Error deleting task:', error);
+        await ctx.reply('Xatolik yuz berdi.');
     }
 };
 
@@ -132,10 +241,12 @@ const clearUserState = (userId) => {
     delete userPhotoUrls[userId];
 };
 
-const askForFeedback = async (ctx, userLang) => {
-    const prompt = userLang === 'uz'
-        ? 'Muammo hal etildi. Iltimos, xizmatimizni baholang (1 dan 5 gacha):'
-        : 'Проблема решена. Пожалуйста, оцените наш сервис от 1 до 5:';
+const askForFeedback = async (ctx) => {
+    const prompt = `Muammo hal etildi. Iltimos, xizmatimizni baholang (1 dan 5 gacha): 
+    
+Проблема решена. Пожалуйста, оцените наш сервис от 1 до 5:`;
+
+
 
     await ctx.reply(prompt, {
         reply_markup: {
@@ -150,11 +261,12 @@ const askForFeedback = async (ctx, userLang) => {
     });
 };
 
-const addCommentToTask = async (taskId, commentText) => {
-    console.log(commentText)
+const addCommentToTask = async (taskId, commentText, isFromTelegram = false) => {
+    const commentWithTag = isFromTelegram ? `Telegram \n${commentText}` : commentText;
+
     const url = `https://api.clickup.com/api/v2/task/${taskId}/comment`;
     const data = {
-        comment_text: commentText,  // The content of the comment
+        comment_text: commentWithTag,
     };
 
     try {
@@ -170,76 +282,11 @@ const addCommentToTask = async (taskId, commentText) => {
     }
 };
 
-const updateTaskStatus = async (newStatus, ctx) => {
-    const taskId = userTaskIds[ctx.from.id];  // Retrieve the taskId
-
-    const url = `https://api.clickup.com/api/v2/task/${taskId}`;
-
-    const data = {
-        status: newStatus
-    };
-    console.log(data)
-
-    try {
-        const response = await axios.put(url, data, {
-            headers: {
-                Authorization: process.env.CLICKUP_API_KEY,
-                'Content-Type': 'application/json',
-            },
-        });
-
-        console.log(response);
-
-        const userLang = userLanguages[ctx.from.id];
-
-        console.log(`Task ${taskId} status updated to "${newStatus}"`);
-
-        if (newStatus === 'complete') {
-            await ctx.reply(
-                userLang === 'uz'
-                    ? 'Muammo hal. Rahmat!'
-                    : 'Проблема решена. Спасибо!'
-            );
-
-            await askForFeedback(ctx, userLang);
-        }
-
-        clearUserState(ctx.from.id);
-    } catch (error) {
-        const userLang = userLanguages[ctx.from.id];
-        console.error('Error updating task status:', error.message);
-        await ctx.reply(userLang === 'uz'
-            ? 'Vazifa holatini yangilashda xatolik yuz berdi.'
-            : 'Произошла ошибка при обновлении статуса задачи.');
-    }
-};
-
-const assignUserToTask = async (taskId, assigneeId) => {
-    const url = `https://api.clickup.com/api/v2/task/${taskId}`;
-    const data = {
-        assignees: { add: [assigneeId] },
-        priority: 1,
-    };
-
-    try {
-        const response = await axios.put(url, data, {
-            headers: {
-                Authorization: process.env.CLICKUP_API_KEY,
-                'Content-Type': 'application/json',
-            },
-        });
-        console.log(`User with ID ${assigneeId} assigned to task ${taskId}`);
-        return response.data;
-    } catch (error) {
-        console.error(`Error assigning user to task ${taskId}:`, error.response?.data || error.message);
-        throw error;
-    }
-};
-
 const askForProblemType = async (ctx, userLang) => {
-    const prompt = userLang === 'uz'
-        ? 'Iltimos, kelib chiqqan muammoni ruknini tanlang:'  // Uzbek version
-        : 'Пожалуйста, выберите категорию проблемы с которой вы столкнулись:'; // Russian version
+    const prompt = `Iltimos, kelib chiqqan muammoni ruknini tanlang: 
+    
+Пожалуйста, выберите категорию проблемы с которой вы столкнулись:`;
+
 
     await ctx.reply(prompt, {
         reply_markup: {
@@ -252,17 +299,25 @@ const askForProblemType = async (ctx, userLang) => {
     });
 };
 
-const askForImageUpload = async (ctx, userLang) => {
-    const prompt = userLang === 'uz'
-        ? 'Iltimos, muammoni tasvirlaydigan rasmni yuboring:'
-        : 'Пожалуйста, отправьте изображение (скриншот), в котором можно увидеть ошибку:';
-    await ctx.reply(prompt);
+const saveFeedbackToClickUp = async (chatId, feedbackText, rating) => {
+    const taskId = await getLatestTaskId(chatId);
+    if (!taskId) {
+        console.error('Task ID not found.');
+        return;
+    }
+
+    console.log(`Сохраняем отзыв: ${feedbackText} с рейтингом ${rating}`);
+    const ratingComment = `User feedback rate: ${rating} звезд`;
+    await addCommentToTask(taskId, ratingComment);
+
+    const feedbackComment = `User feedback: ${feedbackText}`;
+    await addCommentToTask(taskId, feedbackComment);
 };
 
-const sendWaitingMessage = async (ctx, userLang) => {
-    const waitingText = userLang === 'uz'
-        ? 'Iltimos, kuting... So\'rov yaratilmoqda.'
-        : 'Пожалуйста, подождите... Запрос создается.';
+const sendWaitingMessage = async (ctx) => {
+    const waitingText = `Iltimos, kuting... So\'rov yaratilmoqda. 
+    
+Пожалуйста, подождите... Запрос создается.`;
 
     // Отправить сообщение о том, что нужно подождать
     const sentMessage = await ctx.reply(waitingText);
@@ -279,8 +334,9 @@ const processTaskCreation = async (ctx) => {
 
         const title = userSelectedProblems[ctx.from.id] || 'Problem';
 
-        const chat = await ctx.telegram.getChat(ctx.chat.id); // Get chat details
-        const chatDescription = chat.description || 'Нету описании группы';
+        const chat = await ctx.telegram.getChat(ctx.chat.id);
+        const chatDescription = chat.title || 'Нету описании группы';
+        console.log(chat, chatDescription, 'here we are bro');
 
         const task = await sendToClickUp({
             title,
@@ -291,12 +347,10 @@ const processTaskCreation = async (ctx) => {
             chatDescription: chatDescription,
         });
 
-        await ctx.reply("Endi iltimos ma'lumot bering(rasm, text, video message, voice)")
+        await ctx.reply(`Iltimos, ma’lumot bering (rasm, matn, video xabar, ovozli xabar).
+        
+Пожалуйста, предоставьте информацию (фото, текст, видео-сообщение, голосовое сообщение).`)
 
-        // If a photo URL exists, upload the photo to ClickUp
-        if (userPhotoUrls[ctx.from.id]) {
-            await uploadPhotoToClickUp(task.id, [userPhotoUrls[ctx.from.id]]);
-        }
 
         userSteps[ctx.from.id] = 'task_created';
 
@@ -314,58 +368,163 @@ const processTaskCreation = async (ctx) => {
     }
 };
 
-const uploadPhotoToClickUp = async (taskId, photoUrls) => {
-    console.log(photoUrls);
+const uploadPhotoToClickUp = async (taskId, photoUrls, userName) => {
     const url = `https://api.clickup.com/api/v2/task/${taskId}/attachment`;
     const formData = new FormData();
-    for (const photoUrl of photoUrls) {
-        if (!photoUrl) {
-            console.error('Invalid photo URL:', photoUrl);
-            continue;  // Skip if URL is invalid
-        }
-        console.log(`Downloading photo from URL: ${photoUrl}`);
-        // Use axios to download the image from the URL
-        try {
-            const response = await axios.get(photoUrl, { responseType: 'stream' });
-            // Create a filename for the attachment (you can extract it from the URL or generate it)
-            const fileName = path.basename(photoUrl);
-            // Append the downloaded image to FormData
-            formData.append('attachment', response.data, fileName);
-        } catch (err) {
-            console.error(`Error downloading image from URL ${photoUrl}:`, err.message);
-        }
-    }
+
+    console.log(`Downloading photo from URL: ${photoUrls}`);
     try {
-        // Now post the formData to ClickUp to upload the image
+        const response = await axios.get(photoUrls, { responseType: 'stream' });
+        const fileName = path.basename(photoUrls);
+        await addCommentToTask(taskId,  `Sent by ${userName} (${fileName})`);
+
+        formData.append('attachment', response.data, fileName);
+        console.log(`Appended photo: ${fileName}`);
+
+    } catch (err) {
+        console.error(`Error downloading image from URL ${photoUrls}:`, err.message);
+        throw err;
+    }
+
+    try {
+        // Add comment with the user's name
+        const commentText = `Sent by ${userName}: Photo from ClickUp`;
+        formData.append('comment', commentText);
+        console.log(`Appended comment: ${commentText}`);
+
+        // Post the data to ClickUp API
         const response = await axios.post(url, formData, {
             headers: {
                 ...formData.getHeaders(),
                 Authorization: process.env.CLICKUP_API_KEY,
             },
         });
-        console.log('Photos uploaded successfully:', response.data);
+
+        console.log('Photo uploaded successfully:', response.data);
         return response.data;
     } catch (error) {
-        console.error('Error uploading photos to ClickUp:', error.response?.data || error.message);
+        console.error('Error uploading photo to ClickUp:', error.response?.data || error.message);
         throw error;
     }
 };
 
-const saveFeedbackToClickUp = async (userId, feedbackText, rating) => {
-    const taskId = userTaskIds[userId];  // Получаем ID задачи пользователя
+const uploadVoiceToClickUp = async (taskId, voiceUrl, userName) => {
+    console.log("Uploading voice message to ClickUp:", voiceUrl);
 
-    console.log(`monovi ishlayabdi ${feedbackText} ${rating} monoviyam`);
-    const ratingComment = `User feedback: ${rating} stars`;
-    await addCommentToTask(taskId, ratingComment); // Добавляем комментарий с рейтингом
+    const url = `https://api.clickup.com/api/v2/task/${taskId}/attachment`;
+    const formData = new FormData();
 
-    const feedbackComment = `User feedback (text): ${feedbackText}`;
-    await addCommentToTask(taskId, feedbackComment); // Добавляем текст отзыва как комментарий
+    try {
+        const response = await axios.get(voiceUrl, { responseType: 'stream' });
+        const fileName = `voice_message_${Date.now()}.ogg`;
+        await addCommentToTask(taskId,  `Sent by ${userName} (${fileName})`);
+        formData.append('attachment', response.data, fileName);
+
+        console.log(`Appended voice: ${fileName}`);
+
+        // Add a comment to indicate the sender
+        const commentText = `Sent by ${userName}: Voice message from ClickUp`;
+        formData.append('comment', commentText);
+        console.log(`Appended comment: ${commentText}`);
+
+        // Post the data to ClickUp API
+        const clickUpResponse = await axios.post(url, formData, {
+            headers: {
+                Authorization: process.env.CLICKUP_API_KEY,
+                'Content-Type': 'multipart/form-data',
+            },
+        });
+
+        console.log('Voice uploaded successfully:', clickUpResponse.data);
+    } catch (error) {
+        console.error('Error uploading voice to ClickUp:', error.response?.data || error.message);
+    }
+};
+
+const uploadVideoToClickUp = async (taskId, videoUrl, userName) => {
+    console.log("Uploading video message to ClickUp:", videoUrl);
+
+    const url = `https://api.clickup.com/api/v2/task/${taskId}/attachment`;
+    const formData = new FormData();
+
+    try {
+        const response = await axios.get(videoUrl, { responseType: 'stream' });
+
+        const fileName = `video_message_${Date.now()}.mp4`;
+        await addCommentToTask(taskId,  `Sent by ${userName} (${fileName})`);
+
+        formData.append('attachment', response.data, fileName);
+
+        console.log(`Appended video: ${fileName}`);
+
+        const commentText = `Sent by ${userName}: Video from ClickUp`;
+        formData.append('comment', commentText);
+        console.log(`Appended comment: ${commentText}`);
+
+        const clickUpResponse = await axios.post(url, formData, {
+            headers: {
+                Authorization: process.env.CLICKUP_API_KEY,
+                'Content-Type': 'multipart/form-data',
+            },
+        });
+
+        console.log('Video uploaded successfully:', clickUpResponse.data);
+    } catch (error) {
+        console.error('Error uploading video to ClickUp:', error.response?.data || error.message);
+    }
+};
+
+const uploadFileToClickUp = async (taskId, fileUrl, fullName, fileName) => {
+    try {
+        console.log(`Uploading file "${fileName}" to ClickUp for task ID: ${taskId}`);
+
+        // Download the file from Telegram URL
+        const response = await axios.get(fileUrl, { responseType: 'stream' });
+
+        // Prepare the form data
+        const form = new FormData();
+        form.append('attachment', response.data, fileName); // Add the file as an attachment
+        form.append('name', fileName); // Add the file name
+
+        // Send the POST request to ClickUp
+        await axios.post(`https://api.clickup.com/api/v2/task/${taskId}/attachment`, form, {
+            headers: {
+                Authorization: process.env.CLICKUP_API_KEY, // Ensure API key is correctly set
+                ...form.getHeaders(), // Include headers for multipart/form-data
+            },
+        });
+
+        console.log("File uploaded successfully to ClickUp.");
+    } catch (error) {
+        console.error("Error uploading file to ClickUp:", error.response?.data || error.message);
+        throw new Error("Failed to upload the file to ClickUp.");
+    }
 };
 
 const handleGroupMessages = async (ctx) => {
-    const userId = ctx.from.id;
-    console.log(userId);
-    console.log("faak ishladi");
+    if (ctx.chat.type !== 'group' && ctx.chat.type !== 'supergroup') {
+        console.log('Message is not from a group or supergroup. Ignoring message.');
+        return;
+    }
+
+    const chatId = ctx.chat.id;
+    const userMessage = ctx.message.text;
+
+    const firstName = ctx.from.first_name || '';
+    const lastName = ctx.from.last_name || '';
+    const fullName = `${firstName} ${lastName}`.trim();
+
+    console.log(`Received message from ${fullName} in chat ${chatId}: ${userMessage}`);
+
+    const commentText = `Sent by ${fullName}: ${userMessage}`;
+
+    const taskId = await getLatestTaskId(chatId);
+
+    if (taskId) {
+        await addCommentToTask(taskId, commentText);
+    } else {
+        console.log("No task found for this chatId.");
+    }
 };
 
 const getChatIdByTaskId = (taskId) => {
@@ -373,9 +532,165 @@ const getChatIdByTaskId = (taskId) => {
     return task ? task.chatId : null;
 };
 
+const askForCompletionConfirmation = async (chatId) => {
+    const userLang = userLanguages[chatId] || 'uz';
+
+    const message = `Muammo  tasdiqlash holatida. Iltimos, muammo hal qilinganini tasdiqlaysizmi? 
+        
+Задача  в статусе 'подтверждение'. Пожалуйста, подтвердите, завершена ли задача?`;
+
+    const keyboard = {
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: 'Ha (Да)', callback_data: 'task_completed_yes' },
+                    { text: 'Yo\'q (Нет)', callback_data: 'task_completed_no' }
+                ]
+            ]
+        }
+    };
+
+    try {
+        // Send the message with Inline Buttons
+        await bot.telegram.sendMessage(chatId, message, keyboard);
+        console.log('Confirmation message sent to user.');
+    } catch (error) {
+        console.error('Error sending confirmation message:', error);
+    }
+};
+
+const taskTimestamps = {};
+
+const updateTaskStatus = async (newStatus, chatId, ctx) => {
+    try {
+        const taskId = await getLatestTaskId(chatId);
+        console.log(taskId);
+        if (!taskId) {
+            throw new Error('No task ID found for the user.');
+        }
+
+        const url = `https://api.clickup.com/api/v2/task/${taskId}`;
+        const data = { status: newStatus };
+
+        await axios.put(url, data, {
+            headers: {
+                Authorization: process.env.CLICKUP_API_KEY,
+                'Content-Type': 'application/json',
+            },
+        });
+
+        console.log(`Task ${taskId} status updated to "${newStatus}"`);
+
+        const userLang = userLanguages[chatId];
+
+        if (newStatus === 'in progress') {
+            taskTimestamps[chatId] = new Date();
+            console.log("Task start time saved:", formatDate(taskTimestamps[chatId]));
+
+            await ctx.reply(`Muammo hali hal qilinmagan. Iltimos, yana bir bor tekshirib ko\'ring. 
+            
+Проблема еще не решена. Пожалуйста, проверьте еще раз.`);
+        }
+
+        if (newStatus === 'complete') {
+            // Fetch createdAt from database
+            const query = 'SELECT createdAt FROM tasks WHERE taskId = ?';
+            pool.execute(query, [taskId], async (err, results) => {
+                if (err) {
+                    console.error('Error fetching task timestamps:', err);
+                    throw new Error('Error fetching task timestamps from MySQL');
+                }
+
+                if (results.length === 0) {
+                    console.log('No timestamps found for taskId:', taskId);
+                    return;
+                }
+
+                const { createdAt } = results[0];
+                console.log('Fetched createdAt:', createdAt);
+
+                if (createdAt) {
+                    const finishedAt = new Date(); // Get current timestamp
+                    console.log("Setting finishedAt:", finishedAt);
+
+                    const updateQuery = 'UPDATE tasks SET finishedAt = ? WHERE taskId = ?';
+                    pool.execute(updateQuery, [finishedAt, taskId], async (updateErr) => {
+                        if (updateErr) {
+                            console.error('Error updating finishedAt:', updateErr);
+                            return;
+                        }
+
+                        const duration = calculateTimeDifference(new Date(createdAt), finishedAt);
+
+                        const commentText = `Sent by bot: ✅ Задача выполнена!  
+📅 Время начала: ${formatDate(createdAt)}  
+⏳ Время завершения: ${formatDate(finishedAt)}  
+⌛ Потрачено времени: ${duration}`;
+
+                        console.log(commentText);
+                        await addCommentToTask(taskId, commentText, false);
+                    });
+                } else {
+                    console.log("createdAt missing for taskId:", taskId);
+                }
+            });
+
+            await ctx.reply(userLang === 'uz'
+                ? 'Muammo hal. Rahmat!'
+                : 'Проблема решена. Спасибо!');
+
+            await askForFeedback(ctx, userLang);
+        }
+
+        clearUserState(ctx.from.id);
+    } catch (error) {
+        const userLang = userLanguages[chatId];
+        console.error('Error updating task status:', error.message);
+        await ctx.reply(userLang === 'uz'
+            ? 'Vazifa holatini yangilashda xatolik yuz berdi.'
+            : 'Произошла ошибка при обновлении статуса задачи.');
+    }
+};
+
+const formatDate = (date) => {
+    return date.toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' });
+};
+
+const calculateTimeDifference = (start, end) => {
+    const diffMs = Math.abs(end - start); // Difference in milliseconds
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    return `${hours} hours and ${minutes} minutes`;
+};
+
+const getLatestTaskId = async (chatId) => {
+    return new Promise((resolve, reject) => {
+        pool.execute(
+            'SELECT taskId FROM tasks WHERE chatId = ? ORDER BY `createdAt` DESC LIMIT 1',
+            [chatId],
+            (err, results) => {
+                if (err) {
+                    console.error("Error querying database:", err);
+                    reject(err);
+                } else if (results.length === 0) {
+                    console.log(`No task found for chatId ${chatId}`);
+                    resolve(null);
+                } else {
+                    const taskId = results[0].taskId;
+                    console.log(`Found latest taskId ${taskId} for chatId ${chatId}`);
+                    resolve(taskId);
+                }
+            }
+        );
+    });
+};
+
+
 bot.command('create',async (ctx) => {
     const userId = ctx.from.id;
     const chat_id = ctx.chat.id;
+
+    console.log(userSteps[userId]);
     bot.chatId = chat_id;
     console.log("Received message from chat_id:", chat_id);
     if (userSteps[userId] === 'task_created' || userSteps[userId] === 'waiting' || userSteps[userId] === 'problem_type') {
@@ -383,7 +698,7 @@ bot.command('create',async (ctx) => {
             `Sizda hozirda ochiq so\'rov mavjud. Iltimos, uni yakunlang yoki kuting.
                  
                
-У вас уже есть открытая заявка. Пожалуйста, завершите её или подождите.`
+У вас уже есть открытая заявка. Пожалуйста, завершите её или дождитесь её обработки.`
         );
         return;
     }
@@ -396,14 +711,15 @@ bot.command('create',async (ctx) => {
         `Assalomu alaykum, ${ctx.from.first_name || 'hurmatli foydalanuvchi'}! Veda Vector jamosining 24/7 qo‘llab-quvvatlash xizmatiga xush kelibsiz! 
         
         
-Здравствуйте, ${ctx.from.first_name || 'уважаемый пользователь'}! Добро пожаловать в круглосуточную поддержку команды Veda Vector!`
+Здравствуйте, ${ctx.from.first_name || 'уважаемый пользователь'}! Добро пожаловать в круглосуточную поддержку команды Veda Vector!
+`
     );
 
 
     await ctx.reply(
         `Siz yangi so'rov yaratmoqchimisiz? Iltimos, "Ha" yoki "Yo'q" deb javob bering.
         \n
-Вы хотите создать новый запрос? Пожалуйста, ответьте "Да" или "Нет".`,
+Вы хотите создать новый запрос? Пожалуйста, ответьте “Да” или “Нет”.`,
         {
             reply_markup: {
                 inline_keyboard: [
@@ -415,27 +731,69 @@ bot.command('create',async (ctx) => {
     );
 });
 
-bot.command('stop',async (ctx) => {
+bot.command('stop', async (ctx) => {
     const userId = ctx.from.id;
     const userLang = userLanguages[userId] || 'uz';
 
-    clearUserState(userId);
-
-    if (userSteps[userId] !== 'task_created') {
-        await ctx.reply(
+    if (userSteps[userId] === 'task_created') {await ctx.reply(
             userLang === 'uz'
-                ? 'Hozirgi vaqtda hech qanday ariza mavjud emas.'
-                : 'В данный момент нет активных заявок.'
+                ? 'Sizning arizangiz allaqachon yaratilgan. Uni bekor qilish uchun /finish buyrug‘idan foydalaning.'
+                : 'Ваша заявка уже создана. Чтобы отменить её, используйте команду /finish.'
         );
         return;
     }
 
-    await ctx.reply(
-        userLang === 'uz'
-            ? 'Sizning arizangiz bekor qilindi. Yangi yaratish uchun /create ni bosing.'
-            : 'Ваша заявка была отменена. Чтобы создать новое нажмите на /create .'
-    );
+    if (
+        userSteps[userId] === 'problem_type' ||
+        userSteps[userId] === 'waiting'
+    ) {
+        clearUserState(userId);
+
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'Sizning arizangiz bekor qilindi. Yangi yaratish uchun /create ni bosing.'
+                : 'Ваша заявка была отменена. Чтобы создать новое нажмите на /create.'
+        );
+
+        userSteps[userId] = 'canceled';
+    } else {
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'Kechirasiz, hozirgi holatda arizani bekor qilib bo‘lmaydi.'
+                : 'Извините, в текущем состоянии заявку невозможно отменить.'
+        );
+    }
 });
+
+bot.command('finish', async (ctx) => {
+    const userId = ctx.from.id;
+    const userLang = userLanguages[userId] || 'uz';
+
+    if (userSteps[userId] === 'task_created') {
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'Sizning arizangizni bekor qilishni istaysizmi?'
+                : 'Вы уверены, что хотите закрыть заявку?',
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: userLang === 'uz' ? 'Ha' : 'Да', callback_data: 'finish_yes' },
+                            { text: userLang === 'uz' ? 'Yo‘q' : 'Нет', callback_data: 'finish_no' },
+                        ],
+                    ],
+                },
+            }
+        );
+    } else {
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'Hozirgi vaqtda yakunlanadigan ariza mavjud emas.'
+                : 'На данный момент нет активной заявки для завершения.'
+        );
+    }
+});
+
 
 bot.on('callback_query', async (ctx) => {
     const userId = ctx.from.id;
@@ -450,7 +808,7 @@ bot.on('callback_query', async (ctx) => {
         await ctx.answerCbQuery();
         await ctx.reply(
             `Muammo yaratildi tasvirlab bering iltimos:
-        \n
+            
 Заявка успешно создано, пожалуйста опишите:`
         );
         await processTaskCreation(ctx)
@@ -458,49 +816,17 @@ bot.on('callback_query', async (ctx) => {
     }
 
     if (data.startsWith('feedback_')) {
+        const rating = parseInt(data.split('_')[1], 10);
         userFeedbacks[userId] = { rating };
         console.log(userFeedbacks[userId]);
-        const rating = parseInt(data.split('_')[1], 10);
 
         await ctx.answerCbQuery();
-        await ctx.reply(
-            userLang === 'uz'
-                ? `Rahmat! Siz ${rating} ball bilan baholadingiz. Iltimos, xizmatimiz haqidagi fikrlaringizni yozing:`
-                : `Спасибо! Вы оценили нас на ${rating} баллов. Пожалуйста, напишите свой отзыв о нашем сервисе:`
-        );
+        await ctx.reply(`Rahmat! Siz ${rating} ball bilan baholadingiz. Iltimos, xizmatimiz haqidagi fikrlaringizni yozing:
+        
+Спасибо! Вы оценили нас на ${rating} баллов. Пожалуйста, напишите свой отзыв о нашем сервисе:`);
 
         userSteps[userId] = 'feedback_text';
         return;
-    }
-
-    if (currentStep === 'client_role') {
-        if (data.startsWith('client_role_')) {
-            const clientRole = data;
-            const roleName = roles[clientRole][userLang];
-
-            userContacts[userId].role = clientRole;
-            console.log(`User ${userId} selected client role: ${roleName}`);
-            userContacts[userId].role = roles[clientRole]?.[userLang] || 'Unknown role';
-
-            await ctx.answerCbQuery(); // Подтверждаем клик
-            await processTaskCreation(ctx); // Продолжаем процесс создания заявки
-
-            await ctx.reply(
-                userLang === 'uz'
-                    ? `Siz ${roleName} rolini tanladingiz. So'rov muvaffaqiyatli yaratildi.`
-                    : `Вы выбрали роль ${roleName}. Задача успешно создана.`
-            );
-
-            await ctx.reply(
-                userLang === 'uz'
-                    ? `Eng qisqa vaqtda xodimlarimiz aloqaga chiqishadi.`
-                    : `В самое ближайшее время наши сотрудники выйдут на связь.`
-            );
-            console.log(`User ${userId} step changed to 'image'.`);
-
-        } else {
-            console.log(`Unexpected callback query data: ${data}`);
-        }
     }
 
     if (data === 'create_request_yes') {
@@ -517,43 +843,262 @@ bot.on('callback_query', async (ctx) => {
         await ctx.reply(
             `Sizning arizangiz bekor qilindi. Yangi yaratish uchun /create ni bosing.
             \n
-Процесс создания запроса отменен. Чтобы создать новое нажмите на /create.`
+Процесс создания запроса отменен. Чтобы создать новое нажмите на /create.
+`
         );
     }
 
-    if (data.startsWith('problem_solved_')) {
-        if (data === 'problem_solved_yes') {
-            await updateTaskStatus('complete', ctx);
+    if (data.startsWith('task_completed_')) {
+        const chatId = ctx.chat.id;
+        if (data === 'task_completed_yes') {
+            await updateTaskStatus('complete', chatId, ctx);
+            console.log('clicked yes')
             await ctx.answerCbQuery();
 
-        } else if (data === 'problem_solved_no') {
-            await updateTaskStatus('in progress', ctx);
+        } else if (data === 'task_completed_no') {
+            await updateTaskStatus('in progress', chatId, ctx);
+            console.log('clicked no')
             await ctx.answerCbQuery();
 
-            // Notify the user
-            await ctx.reply(
-                userLang === 'uz'
-                    ? 'Muammo hali hal qilinmagan. Iltimos, yana bir bor tekshirib ko\'ring.'
-                    : 'Проблема еще не решена. Пожалуйста, проверьте еще раз.'
-            );
+
+            clearUserState(userId);
+            return;
         }
 
-        // Clear the user state (optional, based on your flow)
-        clearUserState(userId);
-        return;
+    }
+    if (data === 'finish_yes') {
+        await clearUserState(userId);
+        await ctx.answerCbQuery();
+        await deleteTask(ctx);
+
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'Arizangiz muvaffaqiyatli yakunlandi.'
+                : 'Ваша заявка успешно завершена.'
+        );
+
+        userSteps[userId] = 'deleted'
+    } else if (data === 'finish_no') {
+        await ctx.answerCbQuery();
+
+        await ctx.reply(
+            userLang === 'uz'
+                ? 'Arizangiz o‘z holicha qoldirildi.'
+                : 'Ваша заявка осталась без изменений.'
+        );
     }
 
     console.log(`Unhandled callback query: ${data}`);
 });
 
 bot.on(message('text'), async (ctx) => {
-    console.log("Message received");
-    console.log("Chat Type:", ctx.chat.type);
-    console.log("Message:", ctx.message);
+    console.log("Group message received:", ctx.message.text);
+    const userId = ctx.from.id;
+    const currentStep = userSteps[userId];
+    console.log(userSteps[userId]);
+    const chatId = ctx.chat.id;
+    await handleGroupMessages(ctx);
 
-        console.log("Group message received:", ctx.message.text);
+    if (currentStep === 'feedback_text') {
+        const feedbackText = ctx.message.text;
+        const rating = userFeedbacks[ctx.from.id]?.rating;
+        console.log(`Feedback rating: ${rating}`);
 
-        await handleGroupMessages(ctx);
+        if (!rating) {
+            await ctx.reply(
+                `Baho topilmadi. Iltimos, fikr qoldirishdan oldin xizmatni baholang.
+                
+Оценка не найдена. Пожалуйста, поставьте оценку сервису перед тем, как оставить отзыв.                 
+                `
+            );
+            return;
+        }
+
+        await saveFeedbackToClickUp(chatId, feedbackText, rating);
+        await ctx.reply(`Fikr-mulohazangiz qabul qilindi. Rahmat!
+        
+Ваш отзыв принят. Спасибо!`
+        );
+        clearUserState(ctx.from.id);
+    }
+});
+
+bot.on('photo', async (ctx) => {
+    console.log("Received a photo in group chat:", ctx.message.photo);
+
+    const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+    console.log("Photo File ID:", fileId);
+
+    try {
+        const file = await bot.telegram.getFile(fileId);
+        const filePath = file.file_path;
+
+        const photoUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+
+        console.log("Photo URL from Telegram:", photoUrl);
+
+        const chatId = ctx.chat.id;
+        console.log("Chat ID:", chatId);
+
+        const taskId = await getLatestTaskId(chatId);
+        if (!taskId) {
+            console.log("No task found for chatId:", chatId);
+            return;
+        }
+        const firstName = ctx.from.first_name || '';
+        const lastName = ctx.from.last_name || '';
+        const fullName = `${firstName} ${lastName}`.trim();
+
+
+        await uploadPhotoToClickUp(taskId, photoUrl, fullName);
+
+    } catch (error) {
+        console.error("Error processing photo:", error);
+        ctx.reply("There was an error sending your photo to ClickUp.");
+    }
+});
+
+bot.on('voice', async (ctx) => {
+    console.log("Received a voice message in group chat:", ctx.message.voice);
+
+    const fileId = ctx.message.voice.file_id;
+    console.log("Voice File ID:", fileId);
+
+    try {
+        const file = await bot.telegram.getFile(fileId);
+        const filePath = file.file_path;
+
+        const voiceUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+        console.log("Voice URL from Telegram:", voiceUrl);
+
+        const chatId = ctx.chat.id;
+        console.log("Chat ID:", chatId);
+
+        const taskId = await getLatestTaskId(chatId);
+        if (!taskId) {
+            console.log("No task found for chatId:", chatId);
+            return;
+        }
+        const firstName = ctx.from.first_name || '';
+        const lastName = ctx.from.last_name || '';
+        const fullName = `${firstName} ${lastName}`.trim();
+
+
+        await uploadVoiceToClickUp(taskId, voiceUrl, fullName);
+
+    } catch (error) {
+        console.error("Error processing voice message:", error);
+        ctx.reply("There was an error sending your voice message to ClickUp.");
+    }
+});
+
+bot.on('video', async (ctx) => {
+    console.log("Received a video message in group chat:", ctx.message.video);
+
+    const fileId = ctx.message.video.file_id;
+    console.log("Video File ID:", fileId);
+
+    try {
+        const file = await bot.telegram.getFile(fileId);
+        const filePath = file.file_path;
+
+        const videoUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+        console.log("Video URL from Telegram:", videoUrl);
+
+        const chatId = ctx.chat.id;
+        console.log("Chat ID:", chatId);
+
+        const taskId = await getLatestTaskId(chatId);
+        if (!taskId) {
+            console.log("No task found for chatId:", chatId);
+            return;
+        }
+        const firstName = ctx.from.first_name || '';
+        const lastName = ctx.from.last_name || '';
+        const fullName = `${firstName} ${lastName}`.trim();
+
+        await uploadVideoToClickUp(taskId, videoUrl, fullName);
+    } catch (error) {
+        console.error("Error processing video message:", error);
+        ctx.reply("There was an error sending your video message to ClickUp.");
+    }
+});
+
+bot.on('video_note', async (ctx) => {
+    console.log("Received a video message in group chat:", ctx.message.video);
+
+    const fileId = ctx.message.video_note.file_id;
+    console.log("Video File ID:", fileId);
+
+    try {
+        const file = await bot.telegram.getFile(fileId);
+        const filePath = file.file_path;
+
+        const videoUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+        console.log("Video URL from Telegram:", videoUrl);
+
+        const chatId = ctx.chat.id;
+        console.log("Chat ID:", chatId);
+
+        const taskId = await getLatestTaskId(chatId);
+        if (!taskId) {
+            console.log("No task found for chatId:", chatId);
+            return;
+        }
+        const firstName = ctx.from.first_name || '';
+        const lastName = ctx.from.last_name || '';
+        const fullName = `${firstName} ${lastName}`.trim();
+
+
+        await uploadVideoToClickUp(taskId, videoUrl, fullName);
+    } catch (error) {
+        console.error("Error processing video message:", error);
+        ctx.reply("There was an error sending your video message to ClickUp.");
+    }
+});
+
+bot.on('document', async (ctx) => {
+    console.log("Received a document in group chat:", ctx.message.document);
+
+    const fileId = ctx.message.document.file_id;
+    console.log("Document File ID:", fileId);
+
+    try {
+        const file = await bot.telegram.getFile(fileId);
+        const filePath = file.file_path;
+
+        const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+        console.log("Document URL from Telegram:", fileUrl);
+
+        const chatId = ctx.chat.id;
+        console.log("Chat ID:", chatId);
+
+        console.log(`everthing is okay ${fileUrl}`)
+
+        const taskId = await getLatestTaskId(chatId);
+        if (!taskId) {
+            console.log("No task found for chatId:", chatId);
+            return;
+        }
+        const firstName = ctx.from.first_name || '';
+        const lastName = ctx.from.last_name || '';
+        const fullName = `${firstName} ${lastName}`.trim();
+
+        const fileName = ctx.message.document.file_name;
+        const fileExtension = fileName.split('.').pop().toLowerCase();
+
+
+        if (['txt', 'xlsx', 'pdf'].includes(fileExtension)) {
+            await uploadFileToClickUp(taskId, fileUrl, fullName, fileName);
+        } else {
+            console.log("Unsupported file type:", fileExtension);
+            ctx.reply("Этот тип файла не поддерживается.");
+        }
+
+    } catch (error) {
+        console.error("Error processing document:", error);
+        ctx.reply("There was an error sending your document to ClickUp.");
+    }
 });
 
 bot.launch().then(() => {
@@ -564,7 +1109,8 @@ module.exports = {
     bot,
     getChatIdByTaskId,
     processTaskCreation,
-    sendToClickUp
+    sendToClickUp,
+    askForCompletionConfirmation,
 };
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
